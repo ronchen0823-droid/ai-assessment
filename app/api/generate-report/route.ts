@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
 
     const response = await client.chat.completions.create({
       model: process.env.MODEL_NAME || 'deepseek-chat',
-      max_tokens: 1200,
+      max_tokens: 1500,
       stream: false,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -30,7 +30,6 @@ export async function POST(req: NextRequest) {
     })
 
     const rawText = response.choices[0]?.message?.content || ''
-
     const jsonMatch = rawText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
       console.error('AI未返回有效JSON:', rawText)
@@ -42,6 +41,6 @@ export async function POST(req: NextRequest) {
 
   } catch (error) {
     console.error('生成报告失败:', error)
-    return NextResponse.json({ error: '生成报告失败，请稍后重试' }, { status: 500 })
+    return NextResponse.json({ error: '生成失败，请稍后重试' }, { status: 500 })
   }
 }
