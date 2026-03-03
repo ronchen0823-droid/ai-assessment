@@ -1,22 +1,34 @@
 'use client'
 // app/report/[id]/page.tsx
-// 报告展示页：加载已保存的数据，实时流式生成报告，支持分享
+// 卡片式报告展示页
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import dynamic from 'next/dynamic'
-import Link from 'next/link'
 
-// 雷达图只在客户端渲染（recharts不支持SSR）
 const ThinkingRadarChart = dynamic(() => import('@/components/RadarChart'), {
   ssr: false,
-  loading: () => <div className="h-64 bg-slate-50 rounded-2xl animate-pulse" />,
+  loading: () => <div style={{ height: 220, background: '#f8f9fc', borderRadius: 16 }} />,
 })
 
 const GRADE_LABELS: Record<string, string> = {
   primary: '小学（4-6年级）',
   middle: '初中（7-9年级）',
   senior: '高中（10-12年级）',
+}
+
+const LEVEL_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
+  '良好': { color: '#059669', bg: '#f0fdf4', label: '良好' },
+  '中等': { color: '#d97706', bg: '#fffbeb', label: '中等' },
+  '待提升': { color: '#6366f1', bg: '#eef2ff', label: '待提升' },
+}
+
+interface ReportData {
+  headline: string
+  dimensions: { name: string; level: string; desc: string }[]
+  findings: { title: string; body: string }[]
+  action: string
+  closing: string
 }
 
 interface SurveyData {
@@ -26,7 +38,6 @@ interface SurveyData {
   studentAnswers: Record<string, string>
   scores: { active_define: number; active_judge: number; active_integrate: number }
   reportContent: string | null
-  createdAt: string
 }
 
 export default function ReportPage() {
@@ -34,14 +45,12 @@ export default function ReportPage() {
   const id = params.id as string
 
   const [surveyData, setSurveyData] = useState<SurveyData | null>(null)
-  const [reportText, setReportText] = useState('')
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [isComplete, setIsComplete] = useState(false)
+  const [report, setReport] = useState<ReportData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
-  const reportRef = useRef<HTMLDivElement>(null)
 
-  // 加载问卷数据
   useEffect(() => {
     async function loadData() {
       try {
@@ -49,26 +58,27 @@ export default function ReportPage() {
         if (!res.ok) throw new Error('报告不存在')
         const data = await res.json()
         setSurveyData(data)
+        setLoading(false)
 
-        // 如果已有缓存报告，直接展示
         if (data.reportContent) {
-          setReportText(data.reportContent)
-          setIsComplete(true)
+          try {
+            setReport(JSON.parse(data.reportContent))
+          } catch {
+            generateReport(data)
+          }
         } else {
-          // 生成新报告
           generateReport(data)
         }
       } catch (e) {
-        setError('加载报告失败，请检查链接是否正确')
+        setError('加载失败，请检查链接是否正确')
+        setLoading(false)
       }
     }
-
     if (id) loadData()
   }, [id])
 
   async function generateReport(data: SurveyData) {
-    setIsStreaming(true)
-
+    setGenerating(true)
     try {
       const res = await fetch('/api/generate-report', {
         method: 'POST',
@@ -80,190 +90,171 @@ export default function ReportPage() {
           scores: data.scores,
         }),
       })
+      if (!res.ok) throw new Error('生成失败')
+      const reportData = await res.json()
+      setReport(reportData)
 
-      if (!res.ok) throw new Error('AI生成失败')
-
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let fullText = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        const chunk = decoder.decode(value)
-        fullText += chunk
-        setReportText(fullText)
-      }
-
-      setIsComplete(true)
-      setIsStreaming(false)
-
-      // 把生成的报告存回数据库
+      // 保存报告
       await fetch('/api/save-survey', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...data,
           grade_level: data.gradeLevel,
           parent_answers: data.parentAnswers,
           student_answers: data.studentAnswers,
-          report_content: fullText,
+          scores: data.scores,
+          report_content: JSON.stringify(reportData),
         }),
       })
-
     } catch (e) {
-      setError('报告生成失败，请刷新页面重试')
-      setIsStreaming(false)
+      setError('报告生成失败，请刷新重试')
+    } finally {
+      setGenerating(false)
     }
   }
 
   function handleShare() {
-    const url = window.location.href
-    navigator.clipboard.writeText(url).then(() => {
+    navigator.clipboard.writeText(window.location.href).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2500)
     })
   }
 
-  // 把Markdown文本转成HTML（简单处理）
-  function renderMarkdown(text: string) {
-    return text
-      .replace(/## (.*)/g, '<h2>$1</h2>')
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/\n/g, '<br/>')
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <div className="text-center max-w-sm">
-          <div className="text-4xl mb-4">😕</div>
-          <h2 className="text-xl font-bold text-slate-800 mb-2">出错了</h2>
-          <p className="text-slate-500 mb-6">{error}</p>
-          <Link href="/" className="bg-indigo-600 text-white px-6 py-3 rounded-2xl font-medium hover:bg-indigo-700 transition-colors">
-            重新测评
-          </Link>
-        </div>
+  if (error) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: 40, marginBottom: 16 }}>😕</div>
+        <p style={{ color: '#64748b', marginBottom: 24 }}>{error}</p>
+        <a href="/" style={{ background: '#1e293b', color: '#fff', padding: '12px 24px', borderRadius: 12, textDecoration: 'none', fontSize: 14 }}>重新测评</a>
       </div>
-    )
-  }
+    </div>
+  )
 
-  if (!surveyData) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-slate-500">加载中...</p>
-        </div>
+  if (loading) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ width: 40, height: 40, border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }}></div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <p style={{ color: '#94a3b8', fontSize: 14 }}>加载中...</p>
       </div>
-    )
-  }
+    </div>
+  )
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div style={{ background: '#f7f8fc', minHeight: '100vh', fontFamily: "'Noto Sans SC', sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@300;400;500;600&display=swap');
+        * { box-sizing: border-box; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        .card { background: #fff; border-radius: 20px; padding: 24px; margin-bottom: 12px; border: 1px solid #f1f5f9; animation: fadeUp 0.4s ease both; }
+        .dim-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f8fafc; }
+        .dim-item:last-child { border-bottom: none; padding-bottom: 0; }
+        .finding-card { background: #f8f9fc; border-radius: 14px; padding: 16px; margin-bottom: 10px; }
+        .finding-card:last-child { margin-bottom: 0; }
+      `}</style>
+
       {/* 顶部导航 */}
-      <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'rgba(247,248,252,0.9)', backdropFilter: 'blur(10px)', borderBottom: '1px solid #f1f5f9', padding: '12px 20px' }}>
+        <div style={{ maxWidth: 480, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h1 className="font-bold text-slate-900 text-sm">AI思维状态测评报告</h1>
-            <p className="text-xs text-slate-400">{GRADE_LABELS[surveyData.gradeLevel]}</p>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>AI思维状态测评报告</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>{surveyData ? GRADE_LABELS[surveyData.gradeLevel] : ''}</div>
           </div>
-          {isComplete && (
-            <button
-              onClick={handleShare}
-              className="flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-medium px-4 py-2 rounded-xl transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m9.032 4.026a3 3 0 10-5.432-2.684M6.316 10.658a3 3 0 10-5.432 2.684" />
-              </svg>
-              {copied ? '链接已复制 ✓' : '分享报告'}
+          {report && (
+            <button onClick={handleShare} style={{ display: 'flex', alignItems: 'center', gap: 6, background: copied ? '#f0fdf4' : '#f1f5f9', color: copied ? '#059669' : '#64748b', border: 'none', borderRadius: 10, padding: '7px 14px', fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.2s' }}>
+              {copied ? '✓ 已复制' : '分享报告'}
             </button>
           )}
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+      <div style={{ maxWidth: 480, margin: '0 auto', padding: '16px 16px 40px' }}>
 
         {/* 雷达图卡片 */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
-          <h2 className="font-bold text-slate-800 text-base mb-1">思维主导权雷达图</h2>
-          <p className="text-slate-400 text-xs mb-6">三个维度综合反映孩子当前的AI协作模式</p>
-          <ThinkingRadarChart scores={surveyData.scores} />
-
-          {/* 维度说明 */}
-          <div className="mt-6 grid grid-cols-3 gap-3 pt-4 border-t border-slate-50">
-            {[
-              { name: '主动定义', desc: '用AI前先想清楚目标', color: 'text-indigo-600' },
-              { name: '主动判断', desc: '评估AI输出的质量', color: 'text-indigo-600' },
-              { name: '主动整合', desc: '成果体现自己的思考', color: 'text-indigo-600' },
-            ].map(item => (
-              <div key={item.name} className="text-center">
-                <div className={`text-xs font-semibold mb-1 ${item.color}`}>{item.name}</div>
-                <div className="text-slate-400 text-xs leading-tight">{item.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 报告内容卡片 */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-bold text-slate-800 text-base">个性化分析报告</h2>
-            {isStreaming && (
-              <span className="flex items-center gap-1.5 text-xs text-indigo-500 font-medium">
-                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
-                AI生成中
-              </span>
-            )}
-          </div>
-
-          {reportText ? (
-            <div
-              ref={reportRef}
-              className={`report-content text-sm leading-relaxed ${isStreaming ? 'cursor-blink' : ''}`}
-              dangerouslySetInnerHTML={{ __html: `<p>${renderMarkdown(reportText)}</p>` }}
-            />
-          ) : (
-            <div className="space-y-3 py-4">
-              {[...Array(6)].map((_, i) => (
-                <div
-                  key={i}
-                  className={`h-4 bg-slate-100 rounded animate-pulse ${i % 3 === 2 ? 'w-3/4' : 'w-full'}`}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* 完成后的操作区 */}
-        {isComplete && (
-          <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-3xl p-6 border border-indigo-100">
-            <h3 className="font-bold text-slate-800 mb-1">下一步</h3>
-            <p className="text-slate-500 text-sm mb-5">
-              7天思维训练营，让孩子在一周内体验到"思维主导权"的具体含义
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                onClick={handleShare}
-                className="flex-1 border-2 border-indigo-200 text-indigo-700 font-medium py-3 rounded-2xl hover:bg-indigo-50 transition-colors text-sm text-center"
-              >
-                分享给朋友
-              </button>
-              <Link
-                href="/"
-                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-2xl transition-colors text-sm text-center"
-              >
-                了解7天训练营
-              </Link>
-            </div>
+        {surveyData && (
+          <div className="card" style={{ animationDelay: '0.05s' }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#1e293b', marginBottom: 4, fontFamily: "'Noto Serif SC', serif" }}>思维主导权雷达图</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>三个维度综合反映孩子当前的AI协作模式</div>
+            <ThinkingRadarChart scores={surveyData.scores} />
           </div>
         )}
 
-        {/* 底部 */}
-        <div className="text-center py-4">
-          <p className="text-slate-300 text-xs">AI思维课程 · 思维主导权测评系统</p>
+        {/* 生成中状态 */}
+        {generating && (
+          <div className="card" style={{ textAlign: 'center', padding: '40px 24px' }}>
+            <div style={{ width: 32, height: 32, border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 12px' }}></div>
+            <p style={{ color: '#64748b', fontSize: 14, margin: 0 }}>AI 分析中，约需 10 秒...</p>
+          </div>
+        )}
+
+        {report && (
+          <>
+            {/* 核心发现标题 */}
+            <div className="card" style={{ animationDelay: '0.1s', background: '#1e293b' }}>
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10, letterSpacing: '0.1em', color: '#94a3b8' }}>核心发现</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: '#f8fafc', lineHeight: 1.4, fontFamily: "'Noto Serif SC', serif" }}>
+                {report.headline}
+              </div>
+            </div>
+
+            {/* 三维度状态 */}
+            <div className="card" style={{ animationDelay: '0.15s' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 16 }}>三个维度的状态</div>
+              {report.dimensions?.map((dim, i) => {
+                const cfg = LEVEL_CONFIG[dim.level] || LEVEL_CONFIG['中等']
+                return (
+                  <div key={i} className="dim-item">
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>{dim.name}</span>
+                        <span style={{ fontSize: 11, fontWeight: 500, color: cfg.color, background: cfg.bg, padding: '2px 8px', borderRadius: 20 }}>{dim.level}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.5, fontWeight: 300 }}>{dim.desc}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* 关键发现 */}
+            <div className="card" style={{ animationDelay: '0.2s' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 14 }}>关键发现</div>
+              {report.findings?.map((f, i) => (
+                <div key={i} className="finding-card">
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b', marginBottom: 6, lineHeight: 1.4 }}>
+                    {f.title}
+                  </div>
+                  <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.7, fontWeight: 300 }}>{f.body}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* 今天可以做的一件事 */}
+            <div className="card" style={{ animationDelay: '0.25s', background: 'linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%)', border: '1px solid #e0e7ff' }}>
+              <div style={{ fontSize: 11, fontWeight: 500, color: '#6366f1', letterSpacing: '0.1em', marginBottom: 10 }}>今天就能做的一件事</div>
+              <div style={{ fontSize: 15, color: '#3730a3', lineHeight: 1.7, fontWeight: 500 }}>{report.action}</div>
+            </div>
+
+            {/* 收尾 */}
+            <div style={{ padding: '16px 4px', textAlign: 'center' }}>
+              <p style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, fontWeight: 300, margin: 0 }}>{report.closing}</p>
+            </div>
+
+            {/* 底部操作 */}
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+              <button onClick={handleShare} style={{ flex: 1, background: '#fff', border: '1.5px solid #e2e8f0', color: '#475569', borderRadius: 14, padding: '14px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}>
+                {copied ? '链接已复制 ✓' : '分享给朋友'}
+              </button>
+              <a href="/" style={{ flex: 1, background: '#1e293b', color: '#fff', borderRadius: 14, padding: '14px', fontSize: 14, fontWeight: 500, textDecoration: 'none', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                重新测评
+              </a>
+            </div>
+          </>
+        )}
+
+        <div style={{ textAlign: 'center', marginTop: 32, paddingBottom: 8 }}>
+          <p style={{ fontSize: 11, color: '#cbd5e1', margin: 0 }}>AI思维课程 · 思维主导权测评</p>
         </div>
 
       </div>
