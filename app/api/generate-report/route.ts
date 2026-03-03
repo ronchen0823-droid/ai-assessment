@@ -1,6 +1,3 @@
-// app/api/generate-report/route.ts
-// 调用AI生成结构化JSON报告
-
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { getCorePrompt, getAgePatch } from '@/lib/prompts'
@@ -33,8 +30,7 @@ export async function POST(req: NextRequest) {
     })
 
     const rawText = response.choices[0]?.message?.content || ''
-    
-    // 提取JSON（防止模型输出多余内容）
+
     const jsonMatch = rawText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
       console.error('AI未返回有效JSON:', rawText)
