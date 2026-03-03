@@ -1,0 +1,23 @@
+// prisma/schema.prisma
+// 数据库结构定义：每次有人完成问卷就存一条记录
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Survey {
+  id             String   @id @default(cuid())   // 唯一ID，也是分享链接的依据
+  gradeLevel     String                           // primary / middle / senior
+  parentAnswers  Json                             // 家长问卷答案
+  studentAnswers Json                             // 学生问卷答案
+  scores         Json                             // 三维度得分
+  reportContent  String?  @db.Text               // AI生成的报告全文
+  createdAt      DateTime @default(now())         // 创建时间，用于后台统计
+
+  @@map("surveys")
+}
