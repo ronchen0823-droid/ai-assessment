@@ -1,649 +1,623 @@
 // lib/questions.ts
-// 三个学段的完整问卷题目数据
+// 设计原则：每道题都是镜子，不是试卷
+// 1. 用具体场景还原代替抽象态度询问，降低社会期望偏差
+// 2. 家长/学生镜像题：同一场景两人各描述，差距本身是最有价值的数据
+// 3. 每道题标注所属维度，方便 scoring.ts 维护
+// 4. 开放题不进评分，只进 prompt，让报告有"专属感"
 
-export type Option = { label: string; value: 'A' | 'B' | 'C' | 'D' }
-export type Question = { id: string; text: string; options: Option[] }
-export type GradeQuestions = { partA: Question[]; partB: Question[] }
+export type Dimension = 'active_define' | 'active_judge' | 'active_integrate' | 'context' | 'open'
+export type Option = { label: string; value: 'A' | 'B' | 'C' | 'D'; score: 1 | 2 | 3 | 4 }
+export type Question = {
+  id: string
+  text: string
+  dimension: Dimension   // 明确归属维度，scoring.ts 以此为准
+  mirror?: string        // 对应的镜像题 ID（家长题↔学生题）
+  options: Option[]
+}
+export type OpenQuestion = { id: string; text: string; dimension: 'open' }
+export type GradeQuestions = {
+  partA: Question[]
+  partB: Question[]
+  openA: OpenQuestion   // 家长开放题
+  openB: OpenQuestion   // 学生开放题
+}
 
-// ===== 初级版（4-6年级）=====
+// ─────────────────────────────────────────────
+// 初级版（4-6 年级）
+// ─────────────────────────────────────────────
+
 const primaryPartA: Question[] = [
+  // --- context：家庭 AI 氛围 ---
+  // 分值分布: A=3 B=1 C=4 D=2
   {
-    id: 'P1',
-    text: '关于孩子使用AI这件事，您目前的态度更接近哪一种？',
+    id: 'PA1',
+    text: '在你们家，孩子用 AI 这件事更接近哪种状态？',
+    dimension: 'context',
     options: [
-      { label: '我主动引导孩子使用AI，但会和他讨论怎么用、用在哪里', value: 'A' },
-      { label: '我允许孩子用，但没有具体的引导规则，走一步看一步', value: 'B' },
-      { label: '我觉得这个年龄接触AI还早，尽量不让孩子用', value: 'C' },
-      { label: '我没怎么想过这个问题，孩子用不用AI我不太清楚', value: 'D' },
+      { label: '我们聊过哪些情况可以用、哪些最好自己做', value: 'A', score: 3 },
+      { label: '基本没规则，孩子想用就用，我不太管', value: 'B', score: 1 },
+      { label: '我会主动跟他一起用，讨论 AI 给的内容对不对', value: 'C', score: 4 },
+      { label: '我会偶尔提醒他别太依赖，但没有具体规定', value: 'D', score: 2 },
     ],
   },
+  // 分值分布: A=4 B=2 C=1 D=3
   {
-    id: 'P2',
-    text: '您觉得AI对小学生的最大影响是什么？',
+    id: 'PA2',
+    text: '您自己平时用 AI 工具吗？',
+    dimension: 'context',
     options: [
-      { label: '如果引导得当，AI可以成为孩子探索和学习的助手，关键是"怎么用"', value: 'A' },
-      { label: '可能会让孩子变懒，遇到困难不愿意自己动脑了', value: 'B' },
-      { label: '主要担心孩子接触不好的内容，比如安全问题', value: 'C' },
-      { label: '说不好，我对AI能做什么也不太了解', value: 'D' },
+      { label: '经常用，基本知道 AI 能做什么、不能做什么', value: 'A', score: 3 },
+      { label: '几乎不用，不太会', value: 'B', score: 1 },
+      { label: '偶尔用用，比如查个信息', value: 'C', score: 2 },
+      { label: '深度使用，自己也在摸索怎么用好它', value: 'D', score: 4 },
     ],
   },
+
+  // --- active_define 镜像题（对应 PB3）---
+  // 分值分布: A=2 B=4 C=1 D=3
   {
-    id: 'P3',
-    text: '以下哪句话最接近您内心的真实想法？',
+    id: 'PA3',
+    text: '孩子打开 AI 做作业时，您观察到他通常第一步做什么？',
+    dimension: 'active_define',
+    mirror: 'PB3',
     options: [
-      { label: '我担心孩子如果现在不学会用AI，将来会落后于同龄人', value: 'A' },
-      { label: '我更担心孩子太早依赖AI，基础能力还没建立就被绕过了', value: 'B' },
-      { label: '两个都担心——既怕不会用落伍，又怕太依赖丢了基本功', value: 'C' },
-      { label: '我觉得小学生谈竞争力还早，先把基础学好就行', value: 'D' },
+      { label: '他会先自己写或画一些，再让 AI 补充他不会的', value: 'A', score: 4 },
+      { label: '直接把题目或要求发给 AI', value: 'B', score: 2 },
+      { label: '没注意过 / 不太清楚', value: 'C', score: 1 },
+      { label: '先想一想，再问 AI 要某个具体的部分', value: 'D', score: 3 },
     ],
   },
+
+  // --- active_judge 镜像题（对应 PB5）---
+  // 分值分布: A=3 B=4 C=2 D=1
   {
-    id: 'P4',
-    text: '您希望孩子在AI时代具备的最重要的能力是什么？',
+    id: 'PA4',
+    text: 'AI 给孩子内容之后，您观察到他通常怎么处理？',
+    dimension: 'active_judge',
+    mirror: 'PB5',
     options: [
-      { label: '能熟练操作AI工具，用AI提高学习和做事的效率', value: 'A' },
-      { label: '能在用AI的同时保持自己的想法和判断力，不被工具带着走', value: 'B' },
-      { label: '能分清什么时候该用AI、什么时候该自己来，有这个判断力', value: 'C' },
-      { label: '说实话，我还没想清楚孩子具体需要什么能力', value: 'D' },
+      { label: '会读一遍，把他觉得不对的地方改掉', value: 'A', score: 3 },
+      { label: '会认真对比，有时候他会说「这个 AI 写得不是我的感觉」', value: 'B', score: 4 },
+      { label: '有时候改有时候不改，看他有没有时间', value: 'C', score: 2 },
+      { label: '基本直接用，可能改改格式就交了', value: 'D', score: 1 },
     ],
   },
+
+  // --- active_integrate 镜像题（对应 PB7）---
+  // 分值分布: A=2 B=1 C=4 D=3
   {
-    id: 'P5',
-    text: '孩子打开AI工具后，通常的第一个动作是什么？',
+    id: 'PA5',
+    text: '孩子把用 AI 做的作品拿给您看，您问他「这里为什么这么写」，他通常能回答吗？',
+    dimension: 'active_integrate',
+    mirror: 'PB7',
     options: [
-      { label: '先跟我说他想做什么，然后再去问AI', value: 'A' },
-      { label: '直接把作业题目或要求发给AI，让AI帮他做', value: 'B' },
-      { label: '随便问AI一些有趣的问题，比较像聊天探索', value: 'C' },
-      { label: '我没注意过 / 孩子还没用过AI', value: 'D' },
+      { label: '说不太清楚，或者就说「AI 帮我写的」', value: 'A', score: 2 },
+      { label: '没问过这个问题', value: 'B', score: 1 },
+      { label: '能说清楚哪些是自己想的、哪些是 AI 补的、为什么', value: 'C', score: 4 },
+      { label: '能说个大概，但比较笼统', value: 'D', score: 3 },
     ],
   },
+
+  // --- active_judge：家长自身行为，检验「说担心」和「实际做」的矛盾 ---
+  // 分值分布: A=4 B=1 C=3 D=2
   {
-    id: 'P6',
-    text: '孩子用AI帮忙完成作业或创作后，他通常会怎么处理AI给的内容？',
+    id: 'PA6',
+    text: '孩子把用 AI 完成的作业交给您看，您通常的第一反应是？',
+    dimension: 'active_judge',
     options: [
-      { label: '会根据自己的想法修改一部分，然后再提交', value: 'A' },
-      { label: '基本直接用，可能改改别字或格式就交了', value: 'B' },
-      { label: '有时候修改有时候直接用，看心情和时间', value: 'C' },
-      { label: '我不太清楚孩子具体怎么操作的', value: 'D' },
+      { label: '问他「哪些是你自己的想法，哪些是 AI 给的？」', value: 'A', score: 4 },
+      { label: '一般不细问，做出来就好', value: 'B', score: 1 },
+      { label: '顺带问一句「下次能不能多自己想想」', value: 'C', score: 3 },
+      { label: '夸他效率高，会用工具', value: 'D', score: 2 },
     ],
   },
+
+  // --- context：独立能力基线 ---
+  // 分值分布: A=3 B=2 C=4 D=1
   {
-    id: 'P7',
-    text: '如果让孩子不用AI，独立完成一份以前用AI做过的作业，您觉得会怎样？',
+    id: 'PA7',
+    text: '如果让孩子不用 AI，独立完成一份他平时用 AI 做的作业，您觉得？',
+    dimension: 'context',
     options: [
-      { label: '能完成，只是慢一些或质量差一些，基本能力还在', value: 'A' },
-      { label: '可能会发愁不知道怎么开始，但引导一下应该可以', value: 'B' },
-      { label: '估计很难完成，孩子已经习惯了用AI来做这类事', value: 'C' },
-      { label: '没试过，不好说', value: 'D' },
-    ],
-  },
-  {
-    id: 'P8',
-    text: '孩子能不能用自己的话解释他用AI做出的作品是怎么想的、为什么这么做？',
-    options: [
-      { label: '能说清楚，比如"我想写这个是因为...""我让AI改了这里因为..."', value: 'A' },
-      { label: '能说一部分，但比较笼统，像"就是让AI帮我做的"', value: 'B' },
-      { label: '说不太清楚，问多了会不耐烦', value: 'C' },
-      { label: '没问过孩子这个问题', value: 'D' },
-    ],
-  },
-  {
-    id: 'P9',
-    text: '当孩子说作业太难做不出来时，您的第一反应更接近哪个？',
-    options: [
-      { label: '先让孩子自己再想想，实在不行我们一起想办法，最后才考虑用工具', value: 'A' },
-      { label: '建议孩子用AI查一下或问AI怎么做，效率高', value: 'B' },
-      { label: '帮孩子问AI把答案找出来，然后让孩子学着理解', value: 'C' },
-      { label: '看情况，没有固定的做法', value: 'D' },
-    ],
-  },
-  {
-    id: 'P10',
-    text: '您自己在日常生活和工作中使用AI的情况怎么样？',
-    options: [
-      { label: '经常用，而且我会有意识地判断AI给的内容靠不靠谱', value: 'A' },
-      { label: '经常用，AI给什么我基本就用什么，挺好用的', value: 'B' },
-      { label: '偶尔用，不太依赖', value: 'C' },
-      { label: '基本不用，对AI不太熟悉', value: 'D' },
+      { label: '估计很难，他已经习惯 AI 了', value: 'A', score: 1 },
+      { label: '可能需要引导，但基本能力应该还在', value: 'B', score: 3 },
+      { label: '没试过，不好说', value: 'C', score: 2 },
+      { label: '没问题，AI 只是让他更快，能力本身是有的', value: 'D', score: 4 },
     ],
   },
 ]
 
 const primaryPartB: Question[] = [
+  // --- context：AI 使用频率和场景 ---
+  // 分值分布: A=2 B=4 C=1 D=3
   {
-    id: 'S1',
-    text: '你平时用AI（比如ChatGPT、文心一言、豆包等）来做什么？',
+    id: 'PB1',
+    text: '你平时用 AI（比如豆包、Deepseek 等）最多用来做什么？',
+    dimension: 'context',
     options: [
-      { label: '写作文、做手抄报、查资料——主要用来帮我完成作业和任务', value: 'A' },
-      { label: '问各种有趣的问题、让它编故事——主要是好玩', value: 'B' },
-      { label: '两种都有，有时写作业用，有时就是随便玩', value: 'C' },
-      { label: '我还没怎么用过AI', value: 'D' },
+      { label: '主要拿来写作业——把题目发给它，看它怎么做', value: 'A', score: 2 },
+      { label: '还没怎么用过', value: 'B', score: 1 },
+      { label: '两种都有，有时写作业，有时就是好奇随便问问', value: 'C', score: 3 },
+      { label: '会用它帮我查东西、出主意，但我自己来决定用哪个', value: 'D', score: 4 },
     ],
   },
+
+  // --- active_judge：对 AI 能力边界的认知 ---
+  // 分值分布: A=4 B=1 C=3 D=2
   {
-    id: 'S2',
-    text: '你觉得AI厉害还是你厉害？',
+    id: 'PB2',
+    text: '你有没有发现过 AI 说错了什么？',
+    dimension: 'active_judge',
     options: [
-      { label: 'AI知道的比我多，但有些事情它做不到，比如真正理解我的感受', value: 'A' },
-      { label: 'AI比我厉害多了，它什么都知道', value: 'B' },
-      { label: '我觉得差不多，各有各的本事', value: 'C' },
-      { label: '我比AI厉害，AI只是个工具', value: 'D' },
+      { label: '遇到过，我发现它说的和我知道的不一样，去查了才知道它错了', value: 'A', score: 4 },
+      { label: '没注意过，AI 说的应该都对吧', value: 'B', score: 1 },
+      { label: '好像遇到过，但不确定是它错了还是我记错了', value: 'C', score: 3 },
+      { label: '没遇到过，也没想过这个问题', value: 'D', score: 2 },
     ],
   },
+
+  // --- active_define 镜像题（对应 PA3）---
+  // 分值分布: A=3 B=1 C=4 D=2
   {
-    id: 'S3',
-    text: '老师让你写一篇关于"我最喜欢的季节"的作文。你打开AI，接下来你会——',
+    id: 'PB3',
+    text: '老师让你写一篇作文，你打开 AI，你的第一步通常是？',
+    dimension: 'active_define',
+    mirror: 'PA3',
     options: [
-      { label: '先在脑子里想好写哪个季节、写哪些内容，然后让AI帮我查一些素材或给建议', value: 'A' },
-      { label: '告诉AI"帮我写一篇我最喜欢的季节的作文"，看看它写得怎么样再说', value: 'B' },
-      { label: '让AI先给我几个思路，我从里面挑一个喜欢的再开始写', value: 'C' },
-      { label: '直接把作文要求发给AI，用它写的内容交上去', value: 'D' },
+      { label: '直接把作文题目发给 AI，看它怎么写', value: 'A', score: 1 },
+      { label: '先在脑子里想好写什么，再让 AI 帮我找素材', value: 'B', score: 3 },
+      { label: '让 AI 给我几个思路，从里面选一个', value: 'C', score: 2 },
+      { label: '先自己写一段，再让 AI 帮我看看还缺什么', value: 'D', score: 4 },
     ],
   },
+
+  // --- active_define：主动规划 ---
+  // 分值分布: A=4 B=2 C=1 D=3
   {
-    id: 'S4',
-    text: 'AI帮你写了一段文字，你读完之后通常会——',
+    id: 'PB4',
+    text: '老师让你做一个小项目，你会怎么用 AI？',
+    dimension: 'active_define',
     options: [
-      { label: '仔细看一遍，觉得哪里不像我自己说的话就改掉，再加一些自己的想法', value: 'A' },
-      { label: '大概看一下，觉得还行就用了', value: 'B' },
-      { label: '主要检查有没有别字和格式问题，内容上一般不怎么改', value: 'C' },
-      { label: '我觉得AI写得比我好，没必要改', value: 'D' },
+      { label: '先自己想好要做什么、怎么做，然后让 AI 帮忙我不会的部分', value: 'A', score: 4 },
+      { label: '不确定怎么用 AI 做这种事', value: 'B', score: 1 },
+      { label: '问 AI「这个项目怎么做」，让它给我一个方案照着做', value: 'C', score: 1 },
+      { label: '让 AI 帮我整理资料，步骤和思路我自己想', value: 'D', score: 3 },
     ],
   },
+
+  // --- active_judge 镜像题（对应 PA4）---
+  // 分值分布: A=2 B=4 C=1 D=3
   {
-    id: 'S5',
-    text: '你让AI帮你做了一张手抄报的内容，但你发现里面有一个信息跟你知道的不一样。你会——',
+    id: 'PB5',
+    text: 'AI 帮你写了一段文字，你拿到之后通常怎么做？',
+    dimension: 'active_judge',
+    mirror: 'PA4',
     options: [
-      { label: '去查一下到底谁对谁错，如果是AI错了就改过来', value: 'A' },
-      { label: '去问AI"你确定吗"，如果AI坚持它的答案我就信它的', value: 'B' },
-      { label: '差不多就行了，反正是手抄报又不是考试', value: 'C' },
-      { label: '一般不会发现这种问题，因为我不太仔细看内容', value: 'D' },
+      { label: '大概看一眼，没有明显错误就用了', value: 'A', score: 2 },
+      { label: '认真读，把我觉得不对的或者不喜欢的都改掉，有时候改很多', value: 'B', score: 4 },
+      { label: '觉得 AI 写得比我好，直接用', value: 'C', score: 1 },
+      { label: '会读一遍，把感觉不像我自己写的地方改掉', value: 'D', score: 3 },
     ],
   },
+
+  // --- active_judge：遇到矛盾信息的处理 ---
+  // 分值分布: A=4 B=2 C=1 D=2
   {
-    id: 'S6',
-    text: '如果老师让你做一个小项目（比如调查班级同学最喜欢的课外活动），你会怎么用AI？',
+    id: 'PB6',
+    text: 'AI 告诉你一个信息，但你觉得和你知道的不一样，你会？',
+    dimension: 'active_judge',
     options: [
-      { label: '先自己想好要调查什么、怎么调查，然后让AI帮我整理数据或做图表', value: 'A' },
-      { label: '问AI"怎么做这个调查"，让它给我一个完整的方案我照着做', value: 'B' },
-      { label: '让AI把整个项目都做好，我负责打印和提交', value: 'C' },
-      { label: '不确定怎么用AI做这种事', value: 'D' },
+      { label: '去查一下到底谁对，如果是 AI 错了就改过来', value: 'A', score: 4 },
+      { label: '再问 AI 一次，如果它坚持就信它', value: 'B', score: 2 },
+      { label: '差不多就行了，懒得细究', value: 'C', score: 1 },
+      { label: '觉得可能是我记错了，就用 AI 的', value: 'D', score: 2 },
     ],
   },
+
+  // --- active_integrate 镜像题（对应 PA5）---
+  // 分值分布: A=3 B=1 C=4 D=2
   {
-    id: 'S7',
-    text: 'AI帮你写了一篇作文，老师以为是你写的，给了你高分。你心里会——',
+    id: 'PB7',
+    text: 'AI 帮你做完一件作品，如果有人问你「这里你为什么这么做」，你能回答吗？',
+    dimension: 'active_integrate',
+    mirror: 'PA5',
     options: [
-      { label: '觉得有点不对劲，那不是我写的，这个分不算数', value: 'A' },
-      { label: '开心，但也想试试自己写能不能也拿高分', value: 'B' },
-      { label: '很开心，反正结果好就行了', value: 'C' },
-      { label: '没什么特别的感觉，大家都这样', value: 'D' },
+      { label: '大部分能说清楚，除了 AI 帮我补的部分', value: 'A', score: 3 },
+      { label: '说不清楚，反正是 AI 帮我做的', value: 'B', score: 1 },
+      { label: '能说清楚，我知道哪些是我自己想的、哪些是让 AI 做的、为什么这么分', value: 'C', score: 4 },
+      { label: '能说个大概，但细节说不清楚', value: 'D', score: 2 },
     ],
   },
+
+  // --- active_integrate：成果归属感 ---
+  // 分值分布: A=4 B=2 C=1 D=3
   {
-    id: 'S8',
-    text: '你觉得AI有没有可能搞错？',
+    id: 'PB8',
+    text: 'AI 帮你写了一篇作文，老师给了高分，你心里会？',
+    dimension: 'active_integrate',
     options: [
-      { label: '当然会，我就遇到过AI说的东西是错的或者很奇怪的', value: 'A' },
-      { label: '有时候会，但大部分时候它说的都挺对的', value: 'B' },
-      { label: '应该不太会吧，AI比我们知道得多', value: 'C' },
-      { label: '我没想过这个问题', value: 'D' },
-    ],
-  },
-  {
-    id: 'S9',
-    text: '如果明天所有的AI都消失了，不能用了，你觉得会怎样？',
-    options: [
-      { label: '会有点不方便，但我还是能自己完成大部分事情', value: 'A' },
-      { label: '会很不习惯，有些事情可能得花很久才能搞定', value: 'B' },
-      { label: '会很麻烦，很多事我都不知道该怎么做了', value: 'C' },
-      { label: '无所谓，我本来就不怎么用AI', value: 'D' },
-    ],
-  },
-  {
-    id: 'S10',
-    text: '如果有人教你怎么让AI"听你的"而不是你"听AI的"，你觉得——',
-    options: [
-      { label: '听起来很酷，我想学学看', value: 'A' },
-      { label: '有点意思，但得看具体是什么内容', value: 'B' },
-      { label: '感觉无所谓，我现在用AI用得挺好的', value: 'C' },
-      { label: '不太感兴趣', value: 'D' },
-    ],
-  },
-  {
-    id: 'S11',
-    text: '你觉得"学会驾驭AI"这件事重要吗？',
-    options: [
-      { label: '重要，因为如果不会驾驭它，就变成了被它带着走了', value: 'A' },
-      { label: '可能重要吧，但我还没仔细想过', value: 'B' },
-      { label: '不太重要，能用就行了', value: 'C' },
-      { label: '不知道"驾驭AI"是什么意思', value: 'D' },
+      { label: '很开心，反正高分就行', value: 'A', score: 1 },
+      { label: '开心，但想下次试试自己写能不能也得高分', value: 'B', score: 3 },
+      { label: '开心，但有一点点奇怪的感觉', value: 'C', score: 2 },
+      { label: '觉得这分不算数，那不是我写的', value: 'D', score: 4 },
     ],
   },
 ]
 
-// ===== 中级版（7-9年级）=====
+const primaryOpenA: OpenQuestion = {
+  id: 'POA',
+  text: '关于孩子用 AI 这件事，您现在心里最担心的一件具体的事是什么？（一句话就够，不用写完整）',
+  dimension: 'open',
+}
+
+const primaryOpenB: OpenQuestion = {
+  id: 'POB',
+  text: '用 AI 这件事，有没有哪次让你觉得不太对劲，或者让你有点骄傲？说一件真实的事就行。',
+  dimension: 'open',
+}
+
+// ─────────────────────────────────────────────
+// 中级版（7-9 年级）
+// ─────────────────────────────────────────────
+
 const middlePartA: Question[] = [
+  // 分值分布: A=4 B=1 C=2 D=3
   {
-    id: 'P1',
-    text: '孩子用AI已经是日常了。关于这件事，您目前更接近哪种状态？',
+    id: 'MA1',
+    text: '在你们家，孩子用 AI 完成作业这件事更接近哪种状态？',
+    dimension: 'context',
     options: [
-      { label: '我已经和孩子建立了一些使用规则，比如什么情况可以用、什么情况不该用', value: 'A' },
-      { label: '我知道孩子在用，但不确定该怎么管——管太严孩子反感，不管又不放心', value: 'B' },
-      { label: '很难管，孩子用AI的方式我已经控制不了了', value: 'C' },
-      { label: '我觉得不需要特意管，这就是时代趋势', value: 'D' },
+      { label: '我们商量过规则，哪些作业可以用、哪些要自己来', value: 'A', score: 4 },
+      { label: '我不太了解孩子具体怎么用，没关注过', value: 'B', score: 1 },
+      { label: '知道在用，但不确定该不该管、怎么管', value: 'C', score: 2 },
+      { label: '我会时不时提醒，但没有明确规则', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=3 B=1 C=4 D=2
   {
-    id: 'P2',
-    text: '您觉得AI对初中生最值得警惕的影响是什么？',
+    id: 'MA2',
+    text: '孩子遇到不会做的题，他的第一反应通常是？',
+    dimension: 'active_define',
     options: [
-      { label: '孩子的独立思考能力在退化——表面上作业做得很好，但真正理解了多少很难说', value: 'A' },
-      { label: '孩子越来越不愿意花时间思考难题，习惯了"有困难找AI"', value: 'B' },
-      { label: '主要担心学业诚信问题，作业到底是不是自己做的', value: 'C' },
-      { label: '目前还没感觉到明显的负面影响', value: 'D' },
+      { label: '先自己想一想，不会再去搜或者问 AI', value: 'A', score: 3 },
+      { label: '直接问 AI 拿答案，不太看过程', value: 'B', score: 1 },
+      { label: '先自己努力一段时间，实在卡住了才找工具', value: 'C', score: 4 },
+      { label: '问 AI，拿到答案后有时会看看解题思路', value: 'D', score: 2 },
     ],
   },
+  // 分值分布: A=1 B=4 C=2 D=3
   {
-    id: 'P3',
-    text: '关于AI与孩子未来竞争力的关系，您最大的纠结是什么？',
+    id: 'MA3',
+    text: '孩子写完一篇用 AI 辅助的文章，您问他「这个观点是你自己的吗」，他通常怎么回应？',
+    dimension: 'active_integrate',
+    mirror: 'MB6',
     options: [
-      { label: '不用AI的孩子肯定会落后，但只会用AI而没有自己想法的孩子可能更危险', value: 'A' },
-      { label: '周围孩子都在用AI提效，我家孩子不用就是吃亏', value: 'B' },
-      { label: '担心AI让孩子变懒，长远来看不是好事', value: 'C' },
-      { label: '没有特别纠结，顺其自然就好', value: 'D' },
+      { label: '没问过这个问题', value: 'A', score: 1 },
+      { label: '能清楚说出观点是自己的，AI 只帮他查了论据', value: 'B', score: 4 },
+      { label: '说不太清楚，或者说「也有 AI 的东西」', value: 'C', score: 2 },
+      { label: '能说出哪些是自己的，但解释不了为什么这么取舍', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=2 B=4 C=1 D=3
   {
-    id: 'P4',
-    text: '您认为初中阶段最应该培养孩子的AI相关能力是什么？',
+    id: 'MA4',
+    text: '孩子在讨论一个新闻或社会现象时，他的观点通常是？',
+    dimension: 'active_judge',
     options: [
-      { label: '能判断AI给的信息靠不靠谱，不会被它误导', value: 'A' },
-      { label: '能在用AI的同时形成自己的观点，而不是拼贴AI的观点', value: 'B' },
-      { label: '能用AI提高学习效率，特别是应对繁重的作业', value: 'C' },
-      { label: '还没想清楚，觉得孩子自己会慢慢摸索', value: 'D' },
+      { label: '有观点，能说出理由，有时候还会提出反驳', value: 'A', score: 4 },
+      { label: '说得头头是道，但感觉像是在复述某个来源', value: 'B', score: 2 },
+      { label: '不太愿意讨论，觉得「问 AI 就知道了」', value: 'C', score: 1 },
+      { label: '有自己的看法，说不一定多深，但是他的', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=3 B=2 C=4 D=1
   {
-    id: 'P5',
-    text: '孩子交上来的作文或作业，您能分辨哪些是AI写的、哪些是自己写的吗？',
+    id: 'MA5',
+    text: '孩子把用 AI 做的作业拿给您看，您通常怎么回应？',
+    dimension: 'active_judge',
     options: [
-      { label: '能分辨一部分，因为AI写的和孩子自己的风格明显不一样', value: 'A' },
-      { label: '很难分辨，现在孩子交的东西越来越"完美"，但不确定是不是他自己的', value: 'B' },
-      { label: '没怎么注意过这个问题', value: 'C' },
-      { label: '孩子会主动告诉我哪些是用了AI的，我们会讨论', value: 'D' },
+      { label: '顺带问一句下次能不能更多自己来', value: 'A', score: 3 },
+      { label: '夸他效率高，会用工具', value: 'B', score: 2 },
+      { label: '会问「这里哪些是你自己的判断？」', value: 'C', score: 4 },
+      { label: '一般不细问，做出来就行', value: 'D', score: 1 },
     ],
   },
+  // 分值分布: A=4 B=3 C=1 D=2
   {
-    id: 'P6',
-    text: '孩子在讨论一个问题时（比如新闻、社会现象），他的观点通常是——',
+    id: 'MA6',
+    text: '您担心孩子用 AI 最核心的那个担心是什么？',
+    dimension: 'context',
     options: [
-      { label: '有自己的看法，能说出理由，偶尔会参考AI但不是照搬', value: 'A' },
-      { label: '说得头头是道但比较表面，像是在复述某个来源的观点', value: 'B' },
-      { label: '不太愿意讨论，觉得"问AI就知道了"', value: 'C' },
-      { label: '没注意观察过', value: 'D' },
-    ],
-  },
-  {
-    id: 'P7',
-    text: '孩子遇到一道不会做的题目时，他的第一反应是什么？',
-    options: [
-      { label: '先自己想一想，实在不会再问AI或查资料', value: 'A' },
-      { label: '直接问AI，拿到答案后有时会看看解题过程', value: 'B' },
-      { label: '直接问AI拿答案，不怎么看过程', value: 'C' },
-      { label: '不确定，没留意过', value: 'D' },
-    ],
-  },
-  {
-    id: 'P8',
-    text: '孩子能不能清晰地说出自己用AI做的作品里，哪些是AI的、哪些是自己的、为什么这么做？',
-    options: [
-      { label: '能说清楚，而且能解释为什么某些部分让AI做、某些自己来', value: 'A' },
-      { label: '能说个大概，但说不清具体的决策理由', value: 'B' },
-      { label: '说不清楚，或者觉得"都是我做的"但其实大部分是AI的', value: 'C' },
-      { label: '没问过', value: 'D' },
-    ],
-  },
-  {
-    id: 'P9',
-    text: '关于孩子用AI写作业这件事，您在家里的做法更接近哪个？',
-    options: [
-      { label: '我和孩子约定了规则：哪些作业可以用AI辅助，哪些必须自己做', value: 'A' },
-      { label: '没有明确规则，但会时不时提醒孩子不要太依赖', value: 'B' },
-      { label: '基本不管，孩子自己决定怎么用', value: 'C' },
-      { label: '我也经常建议孩子用AI来提高效率', value: 'D' },
-    ],
-  },
-  {
-    id: 'P10',
-    text: '您自己使用AI时，会不会判断它给的内容是否正确或合理？',
-    options: [
-      { label: '会，我习惯核实重要信息，不会直接照搬', value: 'A' },
-      { label: '大多时候会，但如果看起来很合理就不会特意去查', value: 'B' },
-      { label: '一般不会，AI给什么我基本就用什么', value: 'C' },
-      { label: '我基本不用AI', value: 'D' },
+      { label: '目前没有特别担心的', value: 'A', score: 1 },
+      { label: '担心落后，但又怕太依赖——夹在中间不知道怎么办', value: 'B', score: 3 },
+      { label: '影响学业诚信，老师发现会有麻烦', value: 'C', score: 2 },
+      { label: '遇到困难越来越习惯「先问 AI」，自己思考的时间越来越少', value: 'D', score: 4 },
     ],
   },
 ]
 
 const middlePartB: Question[] = [
+  // 分值分布: A=1 B=4 C=2 D=3
   {
-    id: 'S1',
-    text: '你目前主要用AI做什么？',
+    id: 'MB1',
+    text: '如果用一句话描述你和 AI 的关系，哪个最像？',
+    dimension: 'active_define',
     options: [
-      { label: '写作文、做作业、查资料——主要是学习相关的', value: 'A' },
-      { label: '学习和生活都用，比如查信息、写东西、学新技能', value: 'B' },
-      { label: '主要是课业任务太多时拿来帮忙赶工', value: 'C' },
-      { label: '偶尔用用，不是很依赖', value: 'D' },
+      { label: 'AI 是我的「枪手」，很多事它来做，我来交', value: 'A', score: 1 },
+      { label: 'AI 是助手，我告诉它做什么、怎么做', value: 'B', score: 4 },
+      { label: '很多时候是 AI 在带着我走，我跟着它', value: 'C', score: 2 },
+      { label: 'AI 是参谋，我会参考它的建议，但自己做决定', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=2 B=4 C=1 D=3
   {
-    id: 'S2',
-    text: '如果用一句话形容你和AI的关系，你觉得哪个最像？',
+    id: 'MB2',
+    text: '老师布置了一篇关于某个社会话题的文章，你通常怎么开始？',
+    dimension: 'active_define',
     options: [
-      { label: '它是我的助手，我告诉它做什么、怎么做', value: 'A' },
-      { label: '它是我的参谋，我会参考它的建议但自己做决定', value: 'B' },
-      { label: '它是我的"枪手"，很多事情它来做我来交', value: 'C' },
-      { label: '它就是个工具，谈不上什么关系', value: 'D' },
+      { label: '看心情，有时自己写，有时用 AI，取决于时间', value: 'A', score: 2 },
+      { label: '直接把要求发给 AI，让它写，我改改就交', value: 'B', score: 1 },
+      { label: '先想清楚我的观点是什么，再让 AI 帮我查资料，最后自己写', value: 'C', score: 4 },
+      { label: '让 AI 列几个角度，我选一个再写', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=4 B=1 C=3 D=2
   {
-    id: 'S3',
-    text: '老师布置了一篇800字的议论文，要求有明确观点和论据。你会怎么用AI？',
+    id: 'MB3',
+    text: 'AI 帮你写了一段话，你拿到之后会怎么做？',
+    dimension: 'active_judge',
     options: [
-      { label: '先自己想清楚观点是什么，然后用AI帮我查资料、整理论据，最后自己写', value: 'A' },
-      { label: '让AI先生成一篇，然后我在它的基础上修改成自己的风格', value: 'B' },
-      { label: '直接让AI写，我检查一下通不通顺、字数够不够就交了', value: 'C' },
-      { label: '看心情和时间，有时自己写有时让AI写', value: 'D' },
+      { label: '认真读，把逻辑有问题的、和我观点不符的都改，改完才是我的', value: 'A', score: 4 },
+      { label: '觉得 AI 写得比我强，直接用', value: 'B', score: 1 },
+      { label: '会读一遍，把跟我想法不一样的地方改掉', value: 'C', score: 3 },
+      { label: '主要看字数和格式够不够', value: 'D', score: 2 },
     ],
   },
+  // 分值分布: A=3 B=1 C=2 D=4
   {
-    id: 'S4',
-    text: 'AI帮你写了一段关于"手机对青少年的影响"的论述。你读完后会——',
+    id: 'MB4',
+    text: '你用 AI 查了一个知识点，但和课本上说的不一样，你会？',
+    dimension: 'active_judge',
     options: [
-      { label: '看它的论据是不是真的，逻辑有没有漏洞，和我自己的看法比较一下', value: 'A' },
-      { label: '看看整体说得有没有道理，觉得行就用了', value: 'B' },
-      { label: '主要看格式和字数够不够，内容方面AI写的一般都没问题', value: 'C' },
-      { label: '直接用，AI的论述能力比我强', value: 'D' },
+      { label: '以课本为准，老师考的是课本', value: 'A', score: 3 },
+      { label: '无所谓，作业能完成就行', value: 'B', score: 1 },
+      { label: '再问 AI 一次，如果还是一样就信它', value: 'C', score: 2 },
+      { label: '去查其他来源看看谁说得对，自己判断', value: 'D', score: 4 },
     ],
   },
+  // 分值分布: A=3 B=4 C=1 D=1
   {
-    id: 'S5',
-    text: '你用AI查了一个历史事件的资料，但和你在书本上看到的不一样。你会——',
+    id: 'MB5',
+    text: '你觉得 AI 最大的问题是什么？',
+    dimension: 'active_judge',
     options: [
-      { label: '再查其他来源（搜索引擎、别的书）来交叉验证，看谁说得对', value: 'A' },
-      { label: '再问AI一次，如果它给了同样的答案我就信它', value: 'B' },
-      { label: '以书本为准，老师认的是书本', value: 'C' },
-      { label: '无所谓，作业能交就行', value: 'D' },
+      { label: '它写出来的东西缺少「人味」', value: 'A', score: 3 },
+      { label: '它会很自信地说错话，让人很难分辨——这才是最危险的', value: 'B', score: 4 },
+      { label: '没什么大问题，已经很强了', value: 'C', score: 1 },
+      { label: '没认真想过', value: 'D', score: 1 },
     ],
   },
+  // 分值分布: A=2 B=1 C=4 D=3
   {
-    id: 'S6',
-    text: '完成一篇用AI辅助写的文章后，你觉得这篇文章是"你的"还是"AI的"？',
+    id: 'MB6',
+    text: '写完一篇 AI 辅助的文章，你觉得里面的观点是「你的」还是「AI 的」？',
+    dimension: 'active_integrate',
+    mirror: 'MA3',
     options: [
-      { label: '是我的——观点是我想的，结构是我定的，AI只是帮我查了资料或润色', value: 'A' },
-      { label: '一半一半——有些是我的想法，但也有不少是AI的', value: 'B' },
-      { label: '说实话大部分是AI的，我主要是改了改', value: 'C' },
-      { label: '没想过这个问题，作业完成就行', value: 'D' },
+      { label: '说实话大部分是 AI 的，我主要是改了改', value: 'A', score: 2 },
+      { label: '没想过这个问题，完成就行', value: 'B', score: 1 },
+      { label: '是我的——观点是我想的，AI 只是帮我查了资料', value: 'C', score: 4 },
+      { label: '一半一半，有些是我的想法，有些是 AI 的', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=3 B=4 C=2 D=1
   {
-    id: 'S7',
-    text: '你觉得AI最大的问题是什么？',
+    id: 'MB7',
+    text: '如果老师说某篇重要作文必须完全自己写，不能用 AI，你的感受是？',
+    dimension: 'active_integrate',
     options: [
-      { label: '它给的信息不一定对，而且它会很自信地说错话，让人难以分辨', value: 'A' },
-      { label: '它没有真正的理解和感受，所以写出来的东西缺少"人味"', value: 'B' },
-      { label: '没什么大问题，它已经很强了', value: 'C' },
-      { label: '没认真想过这个问题', value: 'D' },
-    ],
-  },
-  {
-    id: 'S8',
-    text: '如果老师禁止使用AI完成一篇重要的作文，你的感受是——',
-    options: [
-      { label: '没问题，我本来就能自己写，AI只是让我更快', value: 'A' },
-      { label: '有点不习惯，但努力一下应该可以', value: 'B' },
-      { label: '会很困难，我已经不太习惯从头到尾自己写一篇完整的文章了', value: 'C' },
-      { label: '觉得不公平，为什么不让用', value: 'D' },
-    ],
-  },
-  {
-    id: 'S9',
-    text: '你觉得现在学会"自己拿主意而不是让AI拿主意"这件事重要吗？',
-    options: [
-      { label: '重要——如果现在习惯了依赖AI思考，以后会越来越难改', value: 'A' },
-      { label: '可能重要，但现在学业压力大，先把AI用好再说', value: 'B' },
-      { label: '不太重要，AI以后会越来越强，会用就行', value: 'C' },
-      { label: '没想过', value: 'D' },
-    ],
-  },
-  {
-    id: 'S10',
-    text: '如果有一个课程教你怎么在用AI的同时保持自己的判断力和创造力，你会——',
-    options: [
-      { label: '很感兴趣，我觉得这个能力很重要', value: 'A' },
-      { label: '有点意思，但得看是不是真的有用', value: 'B' },
-      { label: '不确定，我觉得我现在用AI用得挺好的', value: 'C' },
-      { label: '不感兴趣', value: 'D' },
+      { label: '有点不习惯，但努力一下应该可以', value: 'A', score: 3 },
+      { label: '没问题，AI 只是让我更快，我本来就能写', value: 'B', score: 4 },
+      { label: '会很困难，我已经不太习惯从头到尾自己写了', value: 'C', score: 2 },
+      { label: '觉得不公平，为什么不让用', value: 'D', score: 1 },
     ],
   },
 ]
 
-// ===== 高级版（10-12年级）=====
+const middleOpenA: OpenQuestion = {
+  id: 'MOA',
+  text: '关于孩子用 AI 做作业这件事，您最纠结的是什么？（不用写完整，说真实想法就行）',
+  dimension: 'open',
+}
+
+const middleOpenB: OpenQuestion = {
+  id: 'MOB',
+  text: '用 AI 做作业，你有没有哪次觉得「这不算我做的」？或者哪次觉得「这才是我真正做的」？随便说一件真实的事。',
+  dimension: 'open',
+}
+
+// ─────────────────────────────────────────────
+// 高级版（10-12 年级）
+// ─────────────────────────────────────────────
+
 const seniorPartA: Question[] = [
+  // 分值分布: A=4 B=3 C=1 D=2
   {
-    id: 'P1',
-    text: '关于高中生使用AI，您的基本判断是什么？',
+    id: 'SA1',
+    text: '对于高中生用 AI 这件事，您的基本判断是？',
+    dimension: 'context',
     options: [
-      { label: 'AI能力必须培养，但前提是孩子先有独立思考的基础，否则就是在用AI代替思考', value: 'A' },
-      { label: '高中学业压力大，能用AI提效就应该用，效率优先', value: 'B' },
-      { label: '很纠结——既担心不用落后于人，又担心用多了影响独立性', value: 'C' },
-      { label: '这个阶段孩子已经有自己的判断了，不需要家长太操心', value: 'D' },
+      { label: '高中压力大，能用 AI 提效就应该用', value: 'A', score: 2 },
+      { label: 'AI 工具必须用，但前提是孩子有独立思考的基础，否则是在用 AI 代替思考', value: 'B', score: 4 },
+      { label: '孩子大了有判断，不需要家长太操心', value: 'C', score: 1 },
+      { label: '既担心不用落后，又担心用多了影响独立性，夹在中间', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=3 B=1 C=4 D=2
   {
-    id: 'P2',
-    text: '您认为AI对高中生最深层的影响是什么？',
+    id: 'SA2',
+    text: '孩子写论文或做研究作业时，AI 在其中的角色大概是？',
+    dimension: 'active_define',
+    mirror: 'SB3',
     options: [
-      { label: '影响的是思维的深度——孩子习惯了"快速获取答案"，不愿意花时间深入思考', value: 'A' },
-      { label: '影响的是学业诚信——很难判断孩子的作业和考试是否反映真实水平', value: 'B' },
-      { label: '影响的是自信心——孩子开始觉得"反正AI比我强"，不相信自己能做好', value: 'C' },
-      { label: '目前看不出明显负面影响', value: 'D' },
+      { label: '孩子用 AI 生成初稿，然后在上面修改和补充', value: 'A', score: 3 },
+      { label: '不清楚孩子怎么用的', value: 'B', score: 1 },
+      { label: '孩子先有自己的框架和观点，用 AI 辅助查资料和整理', value: 'C', score: 4 },
+      { label: '孩子大量依赖 AI 生成内容，自己的投入比较少', value: 'D', score: 2 },
     ],
   },
+  // 分值分布: A=2 B=4 C=3 D=1
   {
-    id: 'P3',
-    text: '关于AI与孩子升学及未来发展的关系，您最关心的是什么？',
+    id: 'SA3',
+    text: '孩子完成一篇重要论文后，您问他「这个结论是你自己推导的吗」，他通常能回答清楚吗？',
+    dimension: 'active_integrate',
+    mirror: 'SB6',
     options: [
-      { label: '大学和未来职场都会要求AI能力，但每个人都会用AI时，真正的区分度在于独立思考和创造力', value: 'A' },
-      { label: '担心孩子如果现在不精通AI，大学申请和未来就业都会吃亏', value: 'B' },
-      { label: '担心孩子在高中阶段过度依赖AI，到了大学需要独立思考时会很吃力', value: 'C' },
-      { label: '顺其自然，孩子大了会自己调整', value: 'D' },
+      { label: '说不清楚，或者不觉得需要分清', value: 'A', score: 2 },
+      { label: '能清楚说出哪些是自己的判断、哪些参考了 AI，为什么这么取舍', value: 'B', score: 4 },
+      { label: '能大致说，但深入追问就说不上来了', value: 'C', score: 3 },
+      { label: '没问过这个问题', value: 'D', score: 1 },
     ],
   },
+  // 分值分布: A=2 B=4 C=1 D=3
   {
-    id: 'P4',
-    text: '您认为高中生现在最需要培养的AI相关能力是什么？',
+    id: 'SA4',
+    text: '您认为人人都会用 AI 的时候，孩子真正的竞争力来自什么？',
+    dimension: 'context',
     options: [
-      { label: '能用AI做深度研究和分析，但最终的观点和结论是自己的', value: 'A' },
-      { label: '能识别AI的局限性，知道什么时候AI不可靠', value: 'B' },
-      { label: '精通各种AI工具的使用，能用AI高效完成各种任务', value: 'C' },
-      { label: '没想清楚，觉得孩子在学校会学到的', value: 'D' },
+      { label: '用 AI 做出有自己判断和创造性成果的人——思维深度才是壁垒', value: 'A', score: 4 },
+      { label: '还没想清楚，顺其自然', value: 'B', score: 1 },
+      { label: '谁用 AI 用得更熟练、产出更快', value: 'C', score: 2 },
+      { label: '能识别 AI 的局限，不被它误导', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=1 B=4 C=2 D=3
   {
-    id: 'P5',
-    text: '孩子写论文或做研究性作业时，AI在其中扮演的角色是什么？',
+    id: 'SA5',
+    text: '如果完全不用 AI，孩子能独立完成一篇有质量的论文或研究报告吗？',
+    dimension: 'context',
     options: [
-      { label: '孩子先有自己的研究框架和观点，用AI辅助查文献、整理数据', value: 'A' },
-      { label: '孩子让AI生成初稿，然后在上面修改和补充', value: 'B' },
-      { label: '孩子大量依赖AI生成内容，自己的投入比较少', value: 'C' },
-      { label: '不清楚孩子具体怎么用的', value: 'D' },
-    ],
-  },
-  {
-    id: 'P6',
-    text: '孩子在讨论复杂问题时，他的观点表达质量如何？',
-    options: [
-      { label: '有独立观点，能多角度分析，论据和逻辑都比较清晰', value: 'A' },
-      { label: '有观点但比较浅，或者像是在复述某个来源的说法', value: 'B' },
-      { label: '不太愿意表达观点，觉得"AI分析得更好"', value: 'C' },
-      { label: '没注意观察过', value: 'D' },
-    ],
-  },
-  {
-    id: 'P7',
-    text: '孩子能否清晰地阐述自己的思考过程——比如为什么选这个视角、为什么得出这个结论？',
-    options: [
-      { label: '能清晰地说出自己的思考链路，包括哪些是自己的判断、哪些参考了AI', value: 'A' },
-      { label: '能说个大概，但深入问就说不上来了', value: 'B' },
-      { label: '说不清楚，或者不觉得需要说清楚', value: 'C' },
-      { label: '没试过问孩子', value: 'D' },
-    ],
-  },
-  {
-    id: 'P8',
-    text: '如果完全不用AI，孩子能否独立完成一篇有质量的论文或研究报告？',
-    options: [
-      { label: '能，只是效率低一些，核心能力是有的', value: 'A' },
-      { label: '能完成，但质量会明显下降，特别是在查找资料和组织论述方面', value: 'B' },
-      { label: '很难独立完成，孩子已经习惯了AI参与每个环节', value: 'C' },
-      { label: '不确定，没有试过', value: 'D' },
-    ],
-  },
-  {
-    id: 'P9',
-    text: '关于孩子用AI写作业和论文，您在家里的做法是什么？',
-    options: [
-      { label: '我和孩子讨论过AI使用的边界，达成了共识：工具可以用，但思考必须是自己的', value: 'A' },
-      { label: '有时提醒孩子不要太依赖，但没有系统的规则', value: 'B' },
-      { label: '基本不管，觉得高中生应该有自己的判断了', value: 'C' },
-      { label: '我主动鼓励孩子用AI提效，成绩好最重要', value: 'D' },
-    ],
-  },
-  {
-    id: 'P10',
-    text: '您自己在工作中使用AI时，是否会反思自己的思维过程是否被影响？',
-    options: [
-      { label: '会，我意识到自己有时也会无意识地依赖AI，所以更理解孩子的处境', value: 'A' },
-      { label: '偶尔会想，但没有深入思考过', value: 'B' },
-      { label: '不会，AI对我来说就是工具，谈不上影响思维', value: 'C' },
-      { label: '我基本不用AI', value: 'D' },
+      { label: '很难，孩子已经习惯 AI 参与每个环节了', value: 'A', score: 1 },
+      { label: '能，只是慢一些，核心写作和思考能力是有的', value: 'B', score: 4 },
+      { label: '不确定，没有试过', value: 'C', score: 2 },
+      { label: '能完成，但质量会明显下降，特别是查资料和组织论述', value: 'D', score: 3 },
     ],
   },
 ]
 
 const seniorPartB: Question[] = [
+  // 分值分布: A=2 B=1 C=4 D=3
   {
-    id: 'S1',
-    text: '你目前使用AI的主要方式是什么？',
+    id: 'SB1',
+    text: '如果用一个比喻描述你和 AI 的关系，哪个最准确？',
+    dimension: 'active_define',
     options: [
-      { label: '我有明确的使用策略——知道什么情况让AI做、什么情况自己来', value: 'A' },
-      { label: '主要用来提效——写初稿、查资料、整理笔记等', value: 'B' },
-      { label: '重度依赖——大部分学业任务都会用AI参与', value: 'C' },
-      { label: '偶尔使用，不是必需品', value: 'D' },
+      { label: '我和 AI 是搭档，很难说谁主导谁', value: 'A', score: 2 },
+      { label: '说实话，很多时候 AI 在主导，我在执行', value: 'B', score: 1 },
+      { label: '我是导演，AI 是执行团队——我定方向和标准，AI 帮我实现', value: 'C', score: 4 },
+      { label: '我是编辑，AI 是写手——AI 出初稿，我来判断和修改', value: 'D', score: 3 },
     ],
   },
+  // 分值分布: A=4 B=1 C=3 D=1
   {
-    id: 'S2',
-    text: '如果用一个比喻来描述你和AI的关系，你觉得哪个最准确？',
+    id: 'SB2',
+    text: '你认为 AI 最大的危险是什么？',
+    dimension: 'active_judge',
     options: [
-      { label: '我是导演，AI是执行团队——我定方向和标准，AI帮我实现', value: 'A' },
-      { label: '我是编辑，AI是记者——AI写初稿，我来判断和修改', value: 'B' },
-      { label: '我和AI是"搭档"——很难说谁主导谁', value: 'C' },
-      { label: '说实话，很多时候AI在主导，我在执行', value: 'D' },
+      { label: '它能生成「看起来不错」的内容，但不能保证正确和有深度——这才是最危险的', value: 'A', score: 4 },
+      { label: '没认真想过', value: 'B', score: 1 },
+      { label: '知识有滞后性，而且会「幻觉」——编造信息', value: 'C', score: 3 },
+      { label: '没什么明显危险，现在的 AI 已经很强了', value: 'D', score: 1 },
     ],
   },
+  // 分值分布: A=2 B=4 C=1 D=3
   {
-    id: 'S3',
-    text: '老师布置了一篇需要独立论证的议论文或研究报告。你通常怎么做？',
+    id: 'SB3',
+    text: '老师布置了一篇需要独立论证的论文，你通常怎么做？',
+    dimension: 'active_define',
+    mirror: 'SA2',
     options: [
-      { label: '先确定自己的核心观点和论证结构，然后用AI辅助查找资料和论据，最终完全自己写', value: 'A' },
-      { label: '让AI生成一个框架和初稿，我在这个基础上大幅修改，融入自己的观点', value: 'B' },
-      { label: '让AI写大部分内容，我主要负责调整和完善', value: 'C' },
-      { label: '看情况，有时自己写有时用AI，取决于时间和难度', value: 'D' },
+      { label: '让 AI 写大部分，我主要负责调整完善', value: 'A', score: 1 },
+      { label: '让 AI 生成框架和初稿，我大幅修改，融入自己的观点', value: 'B', score: 3 },
+      { label: '看时间，有时自己写，有时让 AI 写，取决于难度', value: 'C', score: 2 },
+      { label: '先确定自己的核心观点和结构，用 AI 辅助查资料，最后完全自己写', value: 'D', score: 4 },
     ],
   },
+  // 分值分布: A=2 B=4 C=1 D=1
   {
-    id: 'S4',
-    text: 'AI为你生成了一段关于某个社会议题的分析。你会怎么处理？',
+    id: 'SB4',
+    text: 'AI 为你生成了一段关于某个议题的分析，你会怎么处理？',
+    dimension: 'active_judge',
     options: [
-      { label: '审视它的论证结构：前提假设是否成立、论据是否可靠、推理是否严密，然后决定取舍', value: 'A' },
-      { label: '看看有没有明显的错误或偏见，没有的话基本采纳', value: 'B' },
-      { label: '觉得AI分析得比我好，直接用了', value: 'C' },
-      { label: '主要看字数和格式合不合要求', value: 'D' },
+      { label: '看有没有明显的错误，没有的话基本直接用', value: 'A', score: 2 },
+      { label: '看它的论证结构：前提是否成立、论据是否可靠、逻辑是否严密，然后决定取舍', value: 'B', score: 4 },
+      { label: '觉得 AI 分析得比我好，直接用', value: 'C', score: 1 },
+      { label: '主要看字数和格式合不合要求', value: 'D', score: 1 },
     ],
   },
+  // 分值分布: A=1 B=4 C=2 D=2
   {
-    id: 'S5',
-    text: '你用AI查了一个学术观点的资料，但发现不同来源的说法矛盾。你会——',
+    id: 'SB5',
+    text: '你用 AI 查了一个观点，发现不同来源说法矛盾，你会？',
+    dimension: 'active_judge',
     options: [
-      { label: '继续查原始文献或权威来源，分析矛盾的原因，形成自己的判断', value: 'A' },
-      { label: '再问AI一次，让它综合各方观点给我一个结论', value: 'B' },
-      { label: '选一个看起来最可信的用就行', value: 'C' },
-      { label: '这种矛盾很少遇到，因为我一般只用一个来源', value: 'D' },
+      { label: '再问 AI 一次，让它综合各方给我一个结论', value: 'A', score: 2 },
+      { label: '这种情况很少，我一般只用一个来源', value: 'B', score: 1 },
+      { label: '继续查原始文献或权威来源，分析矛盾原因，形成自己的判断', value: 'C', score: 4 },
+      { label: '选一个看起来最可信的用就行', value: 'D', score: 2 },
     ],
   },
+  // 分值分布: A=3 B=1 C=4 D=2
   {
-    id: 'S6',
-    text: '完成一篇重要的论文或报告后，你能否清晰地说出其中每个核心观点的来源？',
+    id: 'SB6',
+    text: '完成一篇重要论文后，你能说清楚其中每个核心观点的来源吗？',
+    dimension: 'active_integrate',
+    mirror: 'SA3',
     options: [
-      { label: '能——我会有意识地记录自己的思考过程和AI的贡献', value: 'A' },
-      { label: '大致能说，但有些细节已经分不清了', value: 'B' },
-      { label: '说实话很难分清，写的过程中我和AI的边界很模糊', value: 'C' },
-      { label: '不觉得需要分清，结果好就行', value: 'D' },
+      { label: '能——我会有意识地区分自己的思考和 AI 的贡献', value: 'A', score: 4 },
+      { label: '不觉得需要分清，结果好就行', value: 'B', score: 1 },
+      { label: '大致能说，但有些细节已经分不清了', value: 'C', score: 3 },
+      { label: '说实话很难分清，写的过程中我和 AI 的边界很模糊', value: 'D', score: 2 },
     ],
   },
+  // 分值分布: A=4 B=3 C=2 D=1
   {
-    id: 'S7',
-    text: '你认为AI最大的局限性是什么？',
+    id: 'SB7',
+    text: '如果最重要的那篇论文必须完全自己写，不能用 AI，你的真实感受是？',
+    dimension: 'active_integrate',
     options: [
-      { label: '它没有真正的理解和判断力——它能生成"像样"的内容但不能保证正确和深度', value: 'A' },
-      { label: '它的知识有滞后性，而且会"幻觉"——自信地编造不存在的信息', value: 'B' },
-      { label: '没什么明显的局限，现在的AI已经很强了', value: 'C' },
-      { label: '没认真想过这个问题', value: 'D' },
-    ],
-  },
-  {
-    id: 'S8',
-    text: '如果老师规定最重要的那篇论文必须完全自己写，不能用AI，你的真实感受是——',
-    options: [
-      { label: '没问题，我有能力独立完成高质量的作品，AI只是让我更快', value: 'A' },
-      { label: '有点紧张，但努力一下应该能行，只是质量可能不如平时', value: 'B' },
-      { label: '会很困难——我已经不太习惯完全独立地从头到尾写一篇东西了', value: 'C' },
-      { label: '觉得不合理——AI时代为什么还要这样做', value: 'D' },
-    ],
-  },
-  {
-    id: 'S9',
-    text: '你觉得在AI时代，什么样的人会有竞争力？',
-    options: [
-      { label: '能用AI做出有自己判断和创造性的成果的人——AI操作是基础，思维深度才是壁垒', value: 'A' },
-      { label: '精通AI工具、能用AI实现高效产出的人', value: 'B' },
-      { label: '谁知道呢，技术变化太快了，说不准', value: 'C' },
-      { label: '没认真想过', value: 'D' },
-    ],
-  },
-  {
-    id: 'S10',
-    text: '如果有一个课程专门训练你在用AI的同时保持独立思考和深度分析的能力，你会——',
-    options: [
-      { label: '很感兴趣——我觉得这是真正重要的能力，而且我也想测试自己在哪个水平', value: 'A' },
-      { label: '有点兴趣，但得看具体内容和时间投入', value: 'B' },
-      { label: '不确定——我觉得我用AI用得挺好的，不确定还需要什么', value: 'C' },
-      { label: '不感兴趣', value: 'D' },
+      { label: '有点紧张，但努力一下应该能行，只是质量可能不如平时', value: 'A', score: 3 },
+      { label: '觉得不合理，AI 时代为什么还这样', value: 'B', score: 1 },
+      { label: '没问题，AI 只是让我更快，我有能力独立完成', value: 'C', score: 4 },
+      { label: '会很困难，我已经不太习惯完全独立从头到尾写了', value: 'D', score: 2 },
     ],
   },
 ]
 
+const seniorOpenA: OpenQuestion = {
+  id: 'SOA',
+  text: '关于孩子在 AI 时代的竞争力，您现在最真实的担心是什么？（说具体的事，不用写完整）',
+  dimension: 'open',
+}
+
+const seniorOpenB: OpenQuestion = {
+  id: 'SOB',
+  text: '你有没有想过：如果有一天 AI 消失了，你现在做的这些事，有多少是真正你自己的能力？',
+  dimension: 'open',
+}
+
+// ─────────────────────────────────────────────
+// 导出
+// ─────────────────────────────────────────────
+
 export const QUESTIONS: Record<'primary' | 'middle' | 'senior', GradeQuestions> = {
-  primary: { partA: primaryPartA, partB: primaryPartB },
-  middle: { partA: middlePartA, partB: middlePartB },
-  senior: { partA: seniorPartA, partB: seniorPartB },
+  primary: { partA: primaryPartA, partB: primaryPartB, openA: primaryOpenA, openB: primaryOpenB },
+  middle:  { partA: middlePartA,  partB: middlePartB,  openA: middleOpenA,  openB: middleOpenB  },
+  senior:  { partA: seniorPartA,  partB: seniorPartB,  openA: seniorOpenA,  openB: seniorOpenB  },
 }
 
 export const GRADE_LABELS = {
   primary: '小学（4-6年级）',
-  middle: '初中（7-9年级）',
-  senior: '高中（10-12年级）',
+  middle:  '初中（7-9年级）',
+  senior:  '高中（10-12年级）',
 }
