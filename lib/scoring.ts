@@ -1,214 +1,145 @@
-// lib/scoring.ts
-// v2 完整重构
-//
-// 核心改动：
-// 1. 三维度各增至 3 题，提升评分信度
-// 2. 新增家长用户类型检测（A/B/C），供 prompts.ts bridge 段个性化
-// 3. 新增家长痛点信号提取，供 bridge 精准切入
-// 4. 修复 senior 版 parent_says_worry_acts_passive 矛盾检测缺失（原版空字符串 bug）
-// 5. 矛盾检测阈值从硬编码 gap≥2 改为基于量表范围的动态判断（gap≥1.5）
-// 6. 最弱维度 tie-breaking：同分时优先报思维链起点（define → judge → integrate）
-// 7. 低可靠性时用家长镜像题做部分加权校正，不只是在报告里温和质疑
-// 8. 新增矛盾类型 parent_self_dependency：家长自身也有无意识 AI 依赖
-
 import { QUESTIONS } from './questions'
+import type { ParentUserType } from './questions'
 
-// ─────────────────────────────────────────────
-// 题目 ID 对照说明（必须与 questions.ts 保持同步）
-// ─────────────────────────────────────────────
-//
-// ★ 维度题目映射（学生题 Part B）
-//                      primary           middle            senior
-// active_define        PB1, PB3, PB4     MB1, MB2, MB9     SB1, SB2, SB9
-// active_judge         PB2, PB5, PB6     MB3, MB4, MB5     SB3, SB4, SB5
-// active_integrate     PB7, PB8, PB9     MB6, MB7, MB8     SB6, SB7, SB8
-//
-// ★ 家长特殊题映射（Part A）
-//                      primary   middle   senior
-// 用户类型题            PA1       MA1      SA1
-// 家长自身 AI 行为题     PA2       MA2      SA2
-// 家长担心程度题         PA6       MA6      SA7   ← senior 旧 SA1 改为用户类型题，新增 SA7
-// 家长实际应对行为题     PA5       MA5      SA6   ← senior 旧为空字符串 bug，新增 SA6 修复
-// 家长痛点题            PA8       MA8      SA8
-//
-// ★ 镜像题对（家长观察 vs 孩子自述）
-//                      家长题   学生题   对应维度
-// primary              PA3      PB3      define
-//                      PA4      PB5      judge
-//                      PA5      PB8      integrate
-// middle               MA3      MB1      define
-//                      MA4      MB4      judge
-//                      MA7      MB7      integrate
-// senior               SA3      SB1      define
-//                      SA4      SB4      judge
-//                      SA5      SB7      integrate
-//
-// ─────────────────────────────────────────────
-
-// ─────────────────────────────────────────────
-// 类型定义
-// ─────────────────────────────────────────────
+export type { ParentUserType }
 
 export type DimensionLevel =
-  | 'not_established'   // 尚未建立
-  | 'emerging'          // 初步出现
-  | 'developing'        // 发展中
-  | 'established'       // 基本稳定
-  | 'strong'            // 稳定内化
+  | 'not_established'
+  | 'emerging'
+  | 'developing'
+  | 'established'
+  | 'strong'
 
 export type ContradictionType =
   | 'none'
-  | 'parent_overestimates'             // 家长高估孩子主动性
-  | 'child_overestimates_self'         // 孩子高估自己主动性
-  | 'parent_says_worry_acts_passive'   // 家长说担心但行为被动
-  | 'child_knows_but_doesnt_do'        // 孩子认知到位但行为落后
-  | 'parent_self_dependency'           // 【新增】家长自身也有无意识 AI 依赖
+  | 'parent_overestimates'
+  | 'child_overestimates_self'
+  | 'parent_says_worry_acts_passive'
+  | 'child_knows_but_doesnt_do'
+  | 'parent_self_dependency'
 
 export type Reliability = 'high' | 'medium' | 'low'
 
-export type ParentUserType = 'A' | 'B' | 'C' | 'unknown'
-// A: 已发现问题，在找解决方案
-// B: 主动对比，在看哪家方案更好
-// C: 潜在需求，还未意识到有问题
-// unknown: 未作答或未识别
+export type ContradictionResult = {
+  type: ContradictionType
+  description: string
+  evidence: string
+}
 
 export type ScoringResult = {
-  // 三维度评分
   active_define:    { raw: number; level: DimensionLevel }
   active_judge:     { raw: number; level: DimensionLevel }
   active_integrate: { raw: number; level: DimensionLevel }
 
-  // 最弱维度
   weakest_dimension: 'active_define' | 'active_judge' | 'active_integrate'
   weakest_label: string
 
-  // 矛盾信号
-  contradiction: {
-    type: ContradictionType
-    description: string
-    evidence: string
-  }
+  contradiction:  ContradictionResult
+  contradictions: ContradictionResult[]
 
-  // 答案可靠性
-  reliability: Reliability
+  reliability:      Reliability
   reliability_note: string
 
-  // 【新增】家长画像信号（供 prompts.ts 个性化使用）
-  parentUserType: ParentUserType
-  parentPainpoint: string   // PA8/MA8/SA8 选项文本；空字符串表示未填
+  parentUserType:  ParentUserType
+  parentPainpoint: string
 }
 
 // ─────────────────────────────────────────────
 // 维度题目映射
+//
+// primary:
+//   active_define:    PB3, PB4
+//   active_judge:     PB2, PB5, PB6
+//   active_integrate: PB7, PB8, PB9
+//
+// middle:
+//   active_define:    MB1, MB2
+//   active_judge:     MB3, MB4, MB5
+//   active_integrate: MB6, MB7, MB8
+//
+// senior:
+//   active_define:    SB1, SB3
+//   active_judge:     SB2, SB4, SB5
+//   active_integrate: SB6, SB7, SB8
 // ─────────────────────────────────────────────
 
 const DIMENSION_MAP: Record<string, Record<string, string[]>> = {
   primary: {
-    active_define:    ['PB1', 'PB3', 'PB4'],
+    active_define:    ['PB3', 'PB4'],
     active_judge:     ['PB2', 'PB5', 'PB6'],
     active_integrate: ['PB7', 'PB8', 'PB9'],
   },
   middle: {
-    active_define:    ['MB1', 'MB2', 'MB9'],
+    active_define:    ['MB1', 'MB2'],
     active_judge:     ['MB3', 'MB4', 'MB5'],
     active_integrate: ['MB6', 'MB7', 'MB8'],
   },
   senior: {
-    active_define:    ['SB1', 'SB2', 'SB9'],
-    active_judge:     ['SB3', 'SB4', 'SB5'],
+    active_define:    ['SB1', 'SB3'],
+    active_judge:     ['SB2', 'SB4', 'SB5'],
     active_integrate: ['SB6', 'SB7', 'SB8'],
   },
 }
 
-// ─────────────────────────────────────────────
-// 镜像题对配置
-// ─────────────────────────────────────────────
-
-const MIRROR_PAIRS: Record<string, Array<[parentId: string, studentId: string]>> = {
-  primary: [
-    ['PA3', 'PB3'],   // define：用 AI 前有没有自己的思路
-    ['PA4', 'PB5'],   // judge：拿到 AI 内容后怎么处理
-    ['PA5', 'PB8'],   // integrate：能否解释自己的决策
-  ],
-  middle: [
-    ['MA3', 'MB1'],   // define
-    ['MA4', 'MB4'],   // judge
-    ['MA7', 'MB7'],   // integrate
-  ],
-  senior: [
-    ['SA3', 'SB1'],   // define
-    ['SA4', 'SB4'],   // judge
-    ['SA5', 'SB7'],   // integrate
-  ],
+// 镜像题对从 questions.ts 的 mirror 字段自动生成，不手动维护
+function buildMirrorPairs(
+  grade: 'primary' | 'middle' | 'senior'
+): Array<[parentId: string, studentId: string]> {
+  const pairs: Array<[string, string]> = []
+  for (const q of QUESTIONS[grade].partA) {
+    if (q.mirror) pairs.push([q.id, q.mirror])
+  }
+  return pairs
 }
 
 // ─────────────────────────────────────────────
-// 家长特殊题 ID 配置
+// 家长特殊题 ID
 // ─────────────────────────────────────────────
 
-/** PA1/MA1/SA1：识别家长认知状态（A/B/C） */
 const USER_TYPE_QUESTION: Record<string, string> = {
   primary: 'PA1',
   middle:  'MA1',
   senior:  'SA1',
 }
 
-/** PA2/MA2/SA2：家长自身 AI 使用行为 */
+const ACTION_QUESTION: Record<string, string> = {
+  primary: 'PA6',
+  middle:  'MA6',
+  senior:  'SA6',
+}
+
 const PARENT_AI_BEHAVIOR_QUESTION: Record<string, string> = {
   primary: 'PA2',
   middle:  'MA2',
   senior:  'SA2',
 }
 
-/** 家长对孩子依赖 AI 的担心程度 */
-const WORRY_QUESTION: Record<string, string> = {
-  primary: 'PA6',
-  middle:  'MA6',
-  senior:  'SA7',   // senior 旧 SA1 已变用户类型题，新增 SA7
-}
-
-/** 家长面对孩子 AI 作品时的实际应对行为 */
-const ACTION_QUESTION: Record<string, string> = {
-  primary: 'PA5',
-  middle:  'MA5',
-  senior:  'SA6',   // 修复原版空字符串 bug
-}
-
-/** 家长痛点题 */
 const PAINPOINT_QUESTION: Record<string, string> = {
   primary: 'PA8',
   middle:  'MA8',
   senior:  'SA8',
 }
 
-/** 孩子对「AI 可能出错」的认知题 */
 const CHILD_AWARENESS_QUESTION: Record<string, string> = {
   primary: 'PB2',
   middle:  'MB5',
-  senior:  'SB5',
+  senior:  'SB2',
 }
 
-/** 孩子遇到矛盾信息的实际行为题 */
 const CHILD_BEHAVIOR_QUESTION: Record<string, string> = {
   primary: 'PB6',
   middle:  'MB4',
-  senior:  'SB4',
+  senior:  'SB5',
 }
 
 // ─────────────────────────────────────────────
 // 矛盾检测阈值
-// 从硬编码 gap≥2 改为基于量表范围的动态判断
 // 1-4 量表中，gap=1.5 约等于量程的 50%，是有实际意义的落差
-// 旧版 gap≥2 的问题：当答案集中在 2-3 分区间时永远不会触发
 // ─────────────────────────────────────────────
 
 const CONTRADICTION_GAP_THRESHOLD = 1.5
 
-// ─────────────────────────────────────────────
-// 最弱维度 tie-breaking 优先级
-// 同分时优先报思维链起点（define 最先被干预效果最好）
-// ─────────────────────────────────────────────
-
+// 最弱维度同分时：define > judge > integrate（思维链起点被干预效果最好）
 const WEAKEST_PRIORITY: Record<string, number> = {
   active_define:    0,
   active_judge:     1,
@@ -220,8 +151,8 @@ const WEAKEST_PRIORITY: Record<string, number> = {
 // ─────────────────────────────────────────────
 
 function getOptionScore(
-  grade: 'primary' | 'middle' | 'senior',
-  part: 'A' | 'B',
+  grade:      'primary' | 'middle' | 'senior',
+  part:       'A' | 'B',
   questionId: string,
   answerValue: string
 ): number {
@@ -233,8 +164,8 @@ function getOptionScore(
 }
 
 function getOptionLabel(
-  grade: 'primary' | 'middle' | 'senior',
-  part: 'A' | 'B',
+  grade:      'primary' | 'middle' | 'senior',
+  part:       'A' | 'B',
   questionId: string,
   answerValue: string
 ): string {
@@ -254,7 +185,7 @@ function rawToLevel(raw: number): DimensionLevel {
 }
 
 // ─────────────────────────────────────────────
-// 常量表（供前端展示使用）
+// 常量表（供前端展示）
 // ─────────────────────────────────────────────
 
 export const LEVEL_LABELS: Record<DimensionLevel, string> = {
@@ -273,19 +204,20 @@ export const DIMENSION_CHINESE: Record<string, string> = {
 
 // ─────────────────────────────────────────────
 // 家长用户类型检测
+// 直接读 option.userType 字段，不依赖选项字母与类型的隐式对应关系
+// （三学段的 PA1/MA1/SA1 选项字母含义各不相同，依赖字母会错判）
 // ─────────────────────────────────────────────
-// questions.ts 中 PA1/MA1/SA1 的选项 value 约定：
-//   "A" = 孩子已经有明显问题，我在找解决方案
-//   "B" = 在对比不同方案，看哪家更合适
-//   "C" = 只是随便看看 / 还不确定孩子是否有问题
 
 function detectParentUserType(
-  grade: 'primary' | 'middle' | 'senior',
+  grade:         'primary' | 'middle' | 'senior',
   parentAnswers: Record<string, string>
 ): ParentUserType {
-  const answer = parentAnswers[USER_TYPE_QUESTION[grade]]
-  if (answer === 'A' || answer === 'B' || answer === 'C') return answer
-  return 'unknown'
+  const qId        = USER_TYPE_QUESTION[grade]
+  const answerValue = parentAnswers[qId]
+  if (!answerValue) return 'unknown'
+  const question = QUESTIONS[grade].partA.find(q => q.id === qId)
+  const option   = question?.options.find(o => o.value === answerValue)
+  return option?.userType ?? 'unknown'
 }
 
 // ─────────────────────────────────────────────
@@ -293,7 +225,7 @@ function detectParentUserType(
 // ─────────────────────────────────────────────
 
 function extractParentPainpoint(
-  grade: 'primary' | 'middle' | 'senior',
+  grade:         'primary' | 'middle' | 'senior',
   parentAnswers: Record<string, string>
 ): string {
   const qId    = PAINPOINT_QUESTION[grade]
@@ -303,19 +235,26 @@ function extractParentPainpoint(
 }
 
 // ─────────────────────────────────────────────
-// 矛盾检测（四种类型 + 新增 parent_self_dependency）
+// 矛盾全量检测（按优先级排序返回所有命中的矛盾）
+//
+// 优先级：
+// ① 家长-孩子认知落差（镜像题，最可观察，报告穿透力最强）
+// ② 家长"说担心但行为被动"
+// ③ 家长自身 AI 依赖
+// ④ 孩子"认知到位但行为落后"
 // ─────────────────────────────────────────────
 
-function detectContradiction(
-  grade: 'primary' | 'middle' | 'senior',
-  parentAnswers: Record<string, string>,
+function detectAllContradictions(
+  grade:          'primary' | 'middle' | 'senior',
+  parentAnswers:  Record<string, string>,
   studentAnswers: Record<string, string>
-): ScoringResult['contradiction'] {
+): ContradictionResult[] {
+  const results: ContradictionResult[] = []
 
-  // ① 家长-孩子认知落差（镜像题对）
-  const pairs = MIRROR_PAIRS[grade] ?? []
-  let maxGap       = 0
-  let bestParentId = ''
+  // ① 家长-孩子镜像落差（自动从 mirror 字段取对）
+  const pairs = buildMirrorPairs(grade)
+  let maxGap        = 0
+  let bestParentId  = ''
   let bestStudentId = ''
 
   for (const [parentId, studentId] of pairs) {
@@ -337,70 +276,73 @@ function detectContradiction(
     const sLabel = getOptionLabel(grade, 'B', bestStudentId, studentAnswers[bestStudentId] ?? '')
 
     if (pScore > sScore) {
-      return {
-        type: 'parent_overestimates',
+      results.push({
+        type:        'parent_overestimates',
         description: '家长认为孩子比较主动，孩子自述的实际情况更为被动',
-        evidence: `家长选：「${pLabel}」；孩子选：「${sLabel}」`,
-      }
+        evidence:    `家长选：「${pLabel}」；孩子选：「${sLabel}」`,
+      })
     } else {
-      return {
-        type: 'child_overestimates_self',
+      results.push({
+        type:        'child_overestimates_self',
         description: '孩子自我评价较高，但家长观察到的实际表现相对被动',
-        evidence: `孩子选：「${sLabel}」；家长观察：「${pLabel}」`,
-      }
+        evidence:    `孩子选：「${sLabel}」；家长观察：「${pLabel}」`,
+      })
     }
   }
 
-  // ② 家长「说担心但行为被动」矛盾
-  const worryId  = WORRY_QUESTION[grade]
+  // ② 家长"说担心但行为被动"
+  const worryId  = USER_TYPE_QUESTION[grade]
   const actionId = ACTION_QUESTION[grade]
   if (worryId && actionId) {
     const worryScore  = getOptionScore(grade, 'A', worryId,  parentAnswers[worryId]  ?? '')
     const actionScore = getOptionScore(grade, 'A', actionId, parentAnswers[actionId] ?? '')
-    if (worryScore > 0 && actionScore > 0 && (worryScore - actionScore) >= CONTRADICTION_GAP_THRESHOLD) {
-      return {
-        type: 'parent_says_worry_acts_passive',
+    if (
+      worryScore  > 0 &&
+      actionScore > 0 &&
+      (worryScore - actionScore) >= CONTRADICTION_GAP_THRESHOLD
+    ) {
+      results.push({
+        type:        'parent_says_worry_acts_passive',
         description: '家长表达了对孩子依赖 AI 的担心，但面对孩子 AI 作品时的实际行为比较被动',
-        evidence: `担心程度：「${getOptionLabel(grade, 'A', worryId, parentAnswers[worryId] ?? '')}」；实际行为：「${getOptionLabel(grade, 'A', actionId, parentAnswers[actionId] ?? '')}」`,
-      }
+        evidence:    `担心程度：「${getOptionLabel(grade, 'A', worryId, parentAnswers[worryId] ?? '')}」；实际行为：「${getOptionLabel(grade, 'A', actionId, parentAnswers[actionId] ?? '')}」`,
+      })
     }
   }
 
-  // ③ 家长自身 AI 依赖矛盾（新增）
-  // 家长担心孩子依赖 AI，但自身 AI 使用评分也偏低（≤2），说明两者面对同一挑战
+  // ③ 家长自身 AI 依赖
   const parentAIId = PARENT_AI_BEHAVIOR_QUESTION[grade]
   if (worryId && parentAIId) {
-    const worryScore      = getOptionScore(grade, 'A', worryId,    parentAnswers[worryId]    ?? '')
-    const parentAIScore   = getOptionScore(grade, 'A', parentAIId, parentAnswers[parentAIId] ?? '')
+    const worryScore    = getOptionScore(grade, 'A', worryId,    parentAnswers[worryId]    ?? '')
+    const parentAIScore = getOptionScore(grade, 'A', parentAIId, parentAnswers[parentAIId] ?? '')
     if (worryScore >= 3 && parentAIScore > 0 && parentAIScore <= 2) {
-      return {
-        type: 'parent_self_dependency',
+      results.push({
+        type:        'parent_self_dependency',
         description: '家长担心孩子依赖 AI，但自己使用 AI 时也存在类似的无意识依赖模式',
-        evidence: `家长对孩子的担心：「${getOptionLabel(grade, 'A', worryId, parentAnswers[worryId] ?? '')}」；家长自身 AI 使用方式：「${getOptionLabel(grade, 'A', parentAIId, parentAnswers[parentAIId] ?? '')}」`,
-      }
+        evidence:    `家长对孩子的担心：「${getOptionLabel(grade, 'A', worryId, parentAnswers[worryId] ?? '')}」；家长自身 AI 使用方式：「${getOptionLabel(grade, 'A', parentAIId, parentAnswers[parentAIId] ?? '')}」`,
+      })
     }
   }
 
-  // ④ 孩子「认知到位但行为落后」矛盾
+  // ④ 孩子"认知到位但行为落后"
   const awarenessId = CHILD_AWARENESS_QUESTION[grade]
   const behaviorId  = CHILD_BEHAVIOR_QUESTION[grade]
   if (awarenessId && behaviorId) {
     const awarenessScore = getOptionScore(grade, 'B', awarenessId, studentAnswers[awarenessId] ?? '')
     const behaviorScore  = getOptionScore(grade, 'B', behaviorId,  studentAnswers[behaviorId]  ?? '')
-    if (awarenessScore > 0 && behaviorScore > 0 && (awarenessScore - behaviorScore) >= CONTRADICTION_GAP_THRESHOLD) {
-      return {
-        type: 'child_knows_but_doesnt_do',
+    if (
+      awarenessScore > 0 &&
+      behaviorScore  > 0 &&
+      (awarenessScore - behaviorScore) >= CONTRADICTION_GAP_THRESHOLD
+    ) {
+      results.push({
+        type:        'child_knows_but_doesnt_do',
         description: '孩子知道 AI 可能出错，但遇到矛盾信息时的实际行为并不一致',
-        evidence: `孩子对 AI 的认知：「${getOptionLabel(grade, 'B', awarenessId, studentAnswers[awarenessId] ?? '')}」；实际遇到矛盾时：「${getOptionLabel(grade, 'B', behaviorId, studentAnswers[behaviorId] ?? '')}」`,
-      }
+        evidence:    `孩子对 AI 的认知：「${getOptionLabel(grade, 'B', awarenessId, studentAnswers[awarenessId] ?? '')}」；实际遇到矛盾时：「${getOptionLabel(grade, 'B', behaviorId, studentAnswers[behaviorId] ?? '')}」`,
+      })
     }
   }
 
-  return {
-    type: 'none',
-    description: '家长和孩子的描述基本一致，无显著认知落差',
-    evidence: '',
-  }
+  return results
 }
 
 // ─────────────────────────────────────────────
@@ -408,10 +350,9 @@ function detectContradiction(
 // ─────────────────────────────────────────────
 
 function detectReliability(
-  grade: 'primary' | 'middle' | 'senior',
+  grade:          'primary' | 'middle' | 'senior',
   studentAnswers: Record<string, string>
 ): { reliability: Reliability; note: string } {
-
   const allIds = Object.values(DIMENSION_MAP[grade]).flat()
   const scores = allIds
     .map(id => getOptionScore(grade, 'B', id, studentAnswers[id] ?? ''))
@@ -441,38 +382,41 @@ function detectReliability(
 
 // ─────────────────────────────────────────────
 // 低可靠性时的家长镜像校正
-// ─────────────────────────────────────────────
-// 原版只在报告文字里「温和质疑」，但分数本身没有变化——这意味着即使孩子
-// 全选最高分，最弱维度判断和报告建议方向也可能完全失准。
 //
-// 校正逻辑：
-// - 只对 raw > 3.2 的维度做校正（避免把本来真实偏高的分数拉低）
-// - 用该维度对应的家长镜像题均分做加权混合
-// - 公式：adjusted = student_raw × 0.6 + parent_mirror_avg × 0.4
+// 家长 AI 行为分（PA2/MA2/SA2）作为家长数据可信度系数：
+//   > 2：观察相对可信，权重 0.40
+//   ≤ 2：家长自身也有依赖倾向，可信度下降，权重 0.20
+//
+// 只对 raw > 3.2 的维度做校正，不拉低真实偏高的分数
+// ─────────────────────────────────────────────
 
 function applyParentMirrorCorrection(
-  grade: 'primary' | 'middle' | 'senior',
-  dimResults: Record<string, { raw: number; level: DimensionLevel }>,
+  grade:        'primary' | 'middle' | 'senior',
+  dimResults:   Record<string, { raw: number; level: DimensionLevel }>,
   parentAnswers: Record<string, string>
 ): Record<string, { raw: number; level: DimensionLevel }> {
-
-  const pairs = MIRROR_PAIRS[grade] ?? []
+  const pairs = buildMirrorPairs(grade)
   if (pairs.length === 0) return dimResults
 
-  // 收集家长镜像题分数
-  const parentScores: number[] = []
+  const parentMirrorScores: number[] = []
   for (const [parentId] of pairs) {
     const s = getOptionScore(grade, 'A', parentId, parentAnswers[parentId] ?? '')
-    if (s > 0) parentScores.push(s)
+    if (s > 0) parentMirrorScores.push(s)
   }
-  if (parentScores.length === 0) return dimResults
+  if (parentMirrorScores.length === 0) return dimResults
 
-  const parentAvg = parentScores.reduce((a, b) => a + b, 0) / parentScores.length
+  const parentMirrorAvg = parentMirrorScores.reduce((a, b) => a + b, 0) / parentMirrorScores.length
+
+  const parentAIId    = PARENT_AI_BEHAVIOR_QUESTION[grade]
+  const parentAIScore = getOptionScore(grade, 'A', parentAIId, parentAnswers[parentAIId] ?? '')
+  const parentWeight  = (parentAIScore > 0 && parentAIScore <= 2) ? 0.20 : 0.40
 
   const corrected: typeof dimResults = {}
   for (const [dim, result] of Object.entries(dimResults)) {
     if (result.raw > 3.2) {
-      const adjustedRaw = parseFloat((result.raw * 0.6 + parentAvg * 0.4).toFixed(3))
+      const adjustedRaw = parseFloat(
+        (result.raw * (1 - parentWeight) + parentMirrorAvg * parentWeight).toFixed(3)
+      )
       corrected[dim] = { raw: adjustedRaw, level: rawToLevel(adjustedRaw) }
     } else {
       corrected[dim] = result
@@ -486,12 +430,12 @@ function applyParentMirrorCorrection(
 // ─────────────────────────────────────────────
 
 export function calculateScores(
-  grade: 'primary' | 'middle' | 'senior',
+  grade:          'primary' | 'middle' | 'senior',
   parentAnswers:  Record<string, string>,
   studentAnswers: Record<string, string>
 ): ScoringResult {
 
-  // Step 1：计算各维度原始均分
+  // Step 1：各维度原始均分
   const rawResults: Record<string, { raw: number; level: DimensionLevel }> = {}
 
   for (const [dim, questionIds] of Object.entries(DIMENSION_MAP[grade])) {
@@ -501,7 +445,7 @@ export function calculateScores(
 
     const raw = scores.length > 0
       ? scores.reduce((a, b) => a + b, 0) / scores.length
-      : 2.0   // 未作答给中间值，不让缺答拉低结果
+      : 2.0
 
     rawResults[dim] = { raw, level: rawToLevel(raw) }
   }
@@ -509,12 +453,12 @@ export function calculateScores(
   // Step 2：可靠性检测
   const { reliability, note } = detectReliability(grade, studentAnswers)
 
-  // Step 3：低可靠性时用家长镜像题做部分校正
+  // Step 3：低可靠性时家长镜像校正（权重动态）
   const dimResults = reliability === 'low'
     ? applyParentMirrorCorrection(grade, rawResults, parentAnswers)
     : rawResults
 
-  // Step 4：最弱维度（同分时 define > judge > integrate 优先级 tie-break）
+  // Step 4：最弱维度（同分时 define > judge > integrate）
   const sorted = Object.entries(dimResults).sort((a, b) => {
     const rawDiff = a[1].raw - b[1].raw
     if (Math.abs(rawDiff) > 0.001) return rawDiff
@@ -522,8 +466,11 @@ export function calculateScores(
   })
   const weakestKey = sorted[0][0] as 'active_define' | 'active_judge' | 'active_integrate'
 
-  // Step 5：矛盾检测
-  const contradiction = detectContradiction(grade, parentAnswers, studentAnswers)
+  // Step 5：全量矛盾检测
+  const contradictions = detectAllContradictions(grade, parentAnswers, studentAnswers)
+  const contradiction: ContradictionResult = contradictions.length > 0
+    ? contradictions[0]
+    : { type: 'none', description: '家长和孩子的描述基本一致，无显著认知落差', evidence: '' }
 
   // Step 6：家长画像信号
   const parentUserType  = detectParentUserType(grade, parentAnswers)
@@ -538,6 +485,7 @@ export function calculateScores(
     weakest_label:     DIMENSION_CHINESE[weakestKey] ?? weakestKey,
 
     contradiction,
+    contradictions,
 
     reliability,
     reliability_note: note,

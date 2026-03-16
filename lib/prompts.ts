@@ -1,23 +1,9 @@
-// lib/prompts.ts
-// v2 完整重构
-//
-// 核心改动：
-// 1. buildReportContext 新增家长用户类型和痛点信号，让 LLM 有个性化素材
-// 2. mirror 字段：补全矛盾为 none 时的写作指令（原版缺失，导致空矛盾时 mirror 变成泛泛总结）
-// 3. bridge 字段：按用户类型 A/B/C 给出三套差异化行动出口，去掉推销语气
-// 4. insight 字段：新增 parent_self_dependency 矛盾类型的处理指令
-// 5. solution_method：新增 parent_self_dependency 场景下的家长共练引导
-
 import { QUESTIONS, GRADE_LABELS } from './questions'
-import type { ScoringResult } from './scoring'
-
-// ─────────────────────────────────────────────
-// 答案字母 → 选项文本（LLM 必须看到语义，不是字母）
-// ─────────────────────────────────────────────
+import type { ScoringResult, ContradictionResult } from './scoring'
 
 function resolveAnswers(
-  grade: 'primary' | 'middle' | 'senior',
-  part: 'A' | 'B',
+  grade:   'primary' | 'middle' | 'senior',
+  part:    'A' | 'B',
   answers: Record<string, string>
 ): Record<string, string> {
   const questions = part === 'A' ? QUESTIONS[grade].partA : QUESTIONS[grade].partB
@@ -30,10 +16,6 @@ function resolveAnswers(
   }
   return resolved
 }
-
-// ─────────────────────────────────────────────
-// 构建 LLM 上下文字符串
-// ─────────────────────────────────────────────
 
 export function buildReportContext(params: {
   grade:          'primary' | 'middle' | 'senior'
@@ -55,11 +37,31 @@ export function buildReportContext(params: {
   ]
 
   const userTypeMap: Record<string, string> = {
-    A: 'A 类——已发现孩子有问题，正在找解决方案',
-    B: 'B 类——主动对比，在看哪家课程更合适',
-    C: 'C 类——潜在需求，还未确定孩子是否有问题',
+    A:       'A 类——已发现孩子有问题，正在找解决方案',
+    B:       'B 类——主动对比，在看哪家课程更合适',
+    C:       'C 类——潜在需求，还未确定孩子是否有问题',
     unknown: '未识别（未作答或选项不匹配）',
   }
+
+  const primary:   ContradictionResult       = scores.contradiction
+  const secondary: ContradictionResult | null =
+    scores.contradictions.length > 1 ? scores.contradictions[1] : null
+
+  const contradictionBlock = [
+    `【主要矛盾信号】`,
+    `类型：${primary.type}`,
+    `描述：${primary.description}`,
+    primary.evidence ? `具体证据：${primary.evidence}` : '',
+    secondary
+      ? [
+          ``,
+          `【次要矛盾信号（可作为 insight 补充层）】`,
+          `类型：${secondary.type}`,
+          `描述：${secondary.description}`,
+          secondary.evidence ? `具体证据：${secondary.evidence}` : '',
+        ].filter(Boolean).join('\n')
+      : '',
+  ].filter(Boolean).join('\n')
 
   return `
 学段：${GRADE_LABELS[grade]}
@@ -86,10 +88,7 @@ ${studentOpen || '（未填写）'}
 ${dimLines.join('\n')}
 最弱维度：${scores.weakest_label}
 
-【矛盾信号】
-类型：${scores.contradiction.type}
-描述：${scores.contradiction.description}
-${scores.contradiction.evidence ? `具体证据：${scores.contradiction.evidence}` : ''}
+${contradictionBlock}
 
 【答案可靠性】
 等级：${scores.reliability}
@@ -97,15 +96,11 @@ ${scores.reliability_note || ''}
 `.trim()
 }
 
-// ─────────────────────────────────────────────
-// 核心 Prompt
-// ─────────────────────────────────────────────
-
 export function getCorePrompt(): string {
   return `你是一位有十年基础教育经验、同时深度使用 AI 的思维教育专家。
 语言风格：像一个真正懂教育的朋友在说话，专业但有人味，不写论文，不讲废话，让没有教育背景的家长读完一遍就能懂。
 
-你将收到：学段、家长用户类型、家长痛点、家长完整答题、孩子完整答题、开放题、三维度评估、矛盾信号、可靠性判断。
+你将收到：学段、家长用户类型、家长痛点、家长完整答题、孩子完整答题、开放题、三维度评估、主要矛盾信号（可能附带次要矛盾信号）、可靠性判断。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 报告的心理弧线目标
@@ -127,30 +122,34 @@ export function getCorePrompt(): string {
 【mirror】50-70 字。把家长的一条答案和孩子的一条答案并置，还原一个真实的家庭画面。
 不评价，只呈现。让家长读完第一反应是「对，就是这样」。
 
-▶ 矛盾类型 = parent_overestimates 或 child_overestimates_self：
+▶ 主要矛盾 = parent_overestimates 或 child_overestimates_self：
   呈现落差——家长看到的和孩子说的哪里不一样，两句话并列，不加判断。
   句式：「您描述的是……孩子自己说的是……」
 
-▶ 矛盾类型 = parent_says_worry_acts_passive：
+▶ 主要矛盾 = parent_says_worry_acts_passive：
   呈现家长的内部矛盾——说担心和实际反应的落差。
   句式：「您说……但您自己也选了……这两件事放在一起，挺有意思的。」
 
-▶ 矛盾类型 = parent_self_dependency：
+▶ 主要矛盾 = parent_self_dependency：
   把家长和孩子并置，隐含「你们面对同一个挑战」的意味，不指责，是共情。
   句式：「您描述孩子的方式是……您自己用 AI 的方式是……两个画面其实很像。」
 
-▶ 矛盾类型 = child_knows_but_doesnt_do：
+▶ 主要矛盾 = child_knows_but_doesnt_do：
   呈现孩子的内部矛盾——认知和行为的落差。
   句式：「孩子说自己知道……但遇到具体情况时……」
 
-▶ 矛盾类型 = none：
+▶ 主要矛盾 = none：
   呈现一致性画面，但在结尾加一句「一致不代表没有提升空间」的暗示。
   句式：「您描述的和孩子说的比较一致——但一致是起点，不是终点，……这件事还值得再往深看一层。」
+  禁止把 mirror 写成泛泛的总结段落，必须出现具体答题内容的细节。
 
 ───────────────────────────────────────────
 【insight】70-90 字。说出核心矛盾并给出善意归因。分两层：点出矛盾 → 给善意解释（不怪孩子不怪家长）。
 
-针对不同矛盾类型的写法方向：
+如果存在次要矛盾信号，可以在 insight 末尾用一句话轻轻带出，作为补充层，增加报告的穿透感，
+但不要展开，不要压过主矛盾的重量。
+
+针对不同主要矛盾类型的写法方向：
 ▶ parent_overestimates：「孩子在您看不到的地方，有另一套应对方式……」
 ▶ child_overestimates_self：「他知道应该怎么做，但知道和做到之间还有一段距离……这不是欺骗，更像是一种……还没习惯自我审视」
 ▶ parent_says_worry_acts_passive：「您的担心是真实的，但担心本身很难变成孩子能感受到的引导……」
@@ -186,7 +185,7 @@ export function getCorePrompt(): string {
   训练方向：完成 AI 辅助任务后，能用自己的话向别人说清楚每个决定背后的理由。
   核心是：建立「这是我的成果」的归属感，不是「我把 AI 给的拼在一起了」。
 
-▶ 如果矛盾类型是 parent_self_dependency：
+▶ 如果主要矛盾类型是 parent_self_dependency：
   在段落结尾加一句：「这个练习，家长和孩子可以一起做——你们面对的是同一个挑战。」
 
 在段落结尾，自然引出「思维主导权」概念。它是解决方案的名字，不是课程名字。
@@ -208,7 +207,8 @@ export function getCorePrompt(): string {
 ▶ 用户类型 unknown：通用版，语气轻松，不硬推。
   参考：「如果你想让孩子系统练这个能力，我们有专门为 X 年级设计的训练，欢迎了解。」
 
-如果矛盾类型是 parent_self_dependency，无论用户类型是什么，在 bridge 末尾加一句「这也是家长自己值得练的事。」
+如果主要矛盾类型是 parent_self_dependency，无论用户类型是什么，在 bridge 末尾加一句：
+「这也是家长自己值得练的事。」
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 可靠性处理规则
@@ -248,10 +248,6 @@ reliability = medium：
 }`
 }
 
-// ─────────────────────────────────────────────
-// 学段补丁（叠加在主 prompt 后面，不替换）
-// ─────────────────────────────────────────────
-
 export function getGradePatch(grade: 'primary' | 'middle' | 'senior'): string {
   const patches: Record<typeof grade, string> = {
     primary: `
@@ -277,10 +273,6 @@ export function getGradePatch(grade: 'primary' | 'middle' | 'senior'): string {
   }
   return patches[grade]
 }
-
-// ─────────────────────────────────────────────
-// 组装完整 prompt（供 API 调用层直接使用）
-// ─────────────────────────────────────────────
 
 export function buildFullPrompt(grade: 'primary' | 'middle' | 'senior'): string {
   return getCorePrompt() + '\n\n' + getGradePatch(grade)
