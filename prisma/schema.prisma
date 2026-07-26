@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Assessment {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+
+  channel        String?
+  utmSource      String?
+  utmCampaign    String?
+
+  grade          String
+
+  childToken     String?
+
+  parentAnswers  Json
+  studentAnswers Json
+  parentOpen     String?
+  studentOpen    String?
+
+  scores         Json
+
+  scoreDefine    Float
+  scoreJudge     Float
+  scoreIntegrate Float
+  defLevel       String
+  judgeLevel     String
+  intLevel       String
+  weakestDim     String
+  contradiction  String
+  reliability    String
+
+  parentUserType  String?
+  parentPainpoint String?
+
+  report          Json?
+  reportGenAt     DateTime?
+
+  stage           String   @default("assessed")
+  stageUpdatedAt  DateTime?
+
+  enrollments     Enrollment[]
+}
+
+model Enrollment {
+  id           String      @id @default(cuid())
+  createdAt    DateTime    @default(now())
+  assessmentId String?
+  assessment   Assessment? @relation(fields: [assessmentId], references: [id])
+  childToken   String?
+  productType  String
+  grade        String
+}
