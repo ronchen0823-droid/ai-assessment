@@ -1,15 +1,24 @@
-import { PrismaClient, Prisma } from '@prisma/client'
 import { devStore } from './dev-store'
 
+// 懒加载 PrismaClient，避免本地没有 prisma generate 时模块加载直接崩溃
 const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined
+  prismaClient: any | undefined
+  prismaAvailable: boolean | undefined
 }
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({ log: ['error'] })
+function loadPrisma() {
+  if (globalForPrisma.prismaAvailable) return globalForPrisma.prismaClient
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+  try {
+    const { PrismaClient } = require('@prisma/client')
+    globalForPrisma.prismaClient = new PrismaClient({ log: ['error'] })
+    globalForPrisma.prismaAvailable = true
+    return globalForPrisma.prismaClient
+  } catch {
+    globalForPrisma.prismaAvailable = false
+    return null
+  }
+}
 
 // ─────────────────────────────────────────────
 // 存储适配器：本地开发无 PostgreSQL 时降级为 JSON 文件
@@ -21,17 +30,29 @@ function isVercel(): boolean {
 
 export function getStore() {
   // Vercel 生产环境始终用 Prisma
-  if (isVercel()) return prisma
+  if (isVercel()) {
+    return loadPrisma() || devStore
+  }
 
-  // 本地开发：如果有 DATABASE_URL，优先用 Prisma
+  // 本地开发：如果有真实 DATABASE_URL，用 Prisma
   if (process.env.DATABASE_URL && process.env.DATABASE_URL !== 'postgresql://user:password@localhost:5432/ai-assessment') {
-    return prisma
+    return loadPrisma() || devStore
   }
 
   // 否则用 JSON 文件存储
   console.warn('[store] 使用本地 JSON 文件存储（无 PostgreSQL），数据保存在 .data/ 目录')
   return devStore
 }
+
+// 向后兼容
+export const prisma = (() => {
+  try {
+    const { PrismaClient } = require('@prisma/client')
+    return globalForPrisma.prismaClient ?? new PrismaClient({ log: ['error'] })
+  } catch {
+    return null as any
+  }
+})()
 
 // ─────────────────────────────────────────────
 // Prisma Schema（对应 schema.prisma）
