@@ -1,4 +1,5 @@
 import { devStore } from './dev-store'
+import type { Prisma } from '@prisma/client'
 
 // 懒加载 PrismaClient，避免本地没有 prisma generate 时模块加载直接崩溃
 const globalForPrisma = globalThis as unknown as {
