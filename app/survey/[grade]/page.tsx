@@ -88,11 +88,22 @@ export default function SurveyPage() {
         }),
       })
 
+      if (!saveRes.ok) {
+        const errData = await saveRes.json().catch(() => ({}))
+        throw new Error(errData.error || `服务器错误（${saveRes.status}）`)
+      }
+
       const { id } = await saveRes.json()
+
+      if (!id) {
+        throw new Error('服务器未返回有效的报告ID')
+      }
+
       router.push(`/report/${id}`)
-    } catch {
-      alert('提交失败，请检查网络后重试')
-      setPhase('part-b')
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : '请检查网络后重试'
+      alert(`提交失败：${msg}`)
+      setPhase('open-b')
     }
   }
 

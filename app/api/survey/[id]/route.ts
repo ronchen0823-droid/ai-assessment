@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/db'
+import { getStore } from '@/lib/db'
 import { withRateLimit } from '@/lib/rate-limit'
 
 const REQUIRED_REPORT_FIELDS = [
@@ -12,7 +12,8 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const assessment = await prisma.assessment.findUnique({
+    const store = getStore()
+    const assessment = await store.assessment.findUnique({
       where: { id: params.id },
     })
 
@@ -32,6 +33,7 @@ const handlePATCH = async function (
   { params }: { params: { id: string } }
 ) {
   try {
+    const store = getStore()
     const body = await req.json()
     const { report, clientReportHash } = body
 
@@ -45,9 +47,8 @@ const handlePATCH = async function (
       }
     }
 
-    const existing = await prisma.assessment.findUnique({
+    const existing = await store.assessment.findUnique({
       where: { id: params.id },
-      select: { scores: true, report: true },
     })
 
     if (!existing) {
@@ -58,13 +59,13 @@ const handlePATCH = async function (
       return NextResponse.json({ error: '报告已生成，不允许覆盖' }, { status: 409 })
     }
 
-    const assessment = await prisma.assessment.update({
+    const assessment = await store.assessment.update({
       where: { id: params.id },
       data: {
         report: report as Record<string, string>,
-        reportGenAt: new Date(),
+        reportGenAt: new Date().toISOString(),
         stage: 'report_viewed',
-        stageUpdatedAt: new Date(),
+        stageUpdatedAt: new Date().toISOString(),
       },
     })
 

@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from '@prisma/client'
+import { devStore } from './dev-store'
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
@@ -9,6 +10,28 @@ export const prisma =
   new PrismaClient({ log: ['error'] })
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+
+// ─────────────────────────────────────────────
+// 存储适配器：本地开发无 PostgreSQL 时降级为 JSON 文件
+// ─────────────────────────────────────────────
+
+function isVercel(): boolean {
+  return !!process.env.VERCEL || !!process.env.VERCEL_ENV
+}
+
+export function getStore() {
+  // Vercel 生产环境始终用 Prisma
+  if (isVercel()) return prisma
+
+  // 本地开发：如果有 DATABASE_URL，优先用 Prisma
+  if (process.env.DATABASE_URL && process.env.DATABASE_URL !== 'postgresql://user:password@localhost:5432/ai-assessment') {
+    return prisma
+  }
+
+  // 否则用 JSON 文件存储
+  console.warn('[store] 使用本地 JSON 文件存储（无 PostgreSQL），数据保存在 .data/ 目录')
+  return devStore
+}
 
 // ─────────────────────────────────────────────
 // Prisma Schema（对应 schema.prisma）

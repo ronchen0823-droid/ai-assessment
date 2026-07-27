@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Prisma } from '@prisma/client'
-import { prisma } from '@/lib/db'
+import { getStore } from '@/lib/db'
 import { calculateScores } from '@/lib/scoring'
 import type { ScoringResult } from '@/lib/scoring'
 import { withRateLimit } from '@/lib/rate-limit'
@@ -84,14 +83,16 @@ const handlePOST = async function (req: NextRequest) {
       return NextResponse.json({ error: '服务端评分计算异常' }, { status: 500 })
     }
 
-    const assessment = await prisma.assessment.create({
+    const store = getStore()
+
+    const assessment = await store.assessment.create({
       data: {
         grade: grade_level,
         parentAnswers: parent_answers,
         studentAnswers: student_answers,
         parentOpen: parent_open || null,
         studentOpen: student_open || null,
-        scores: scores as unknown as Prisma.InputJsonValue,
+        scores: scores,
         scoreDefine: scores.active_define.raw,
         scoreJudge: scores.active_judge.raw,
         scoreIntegrate: scores.active_integrate.raw,
