@@ -69,6 +69,7 @@ export default function ReportPage() {
       }
     }
     if (id) loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
   async function generateReport(data: SurveyData) {
@@ -152,7 +153,17 @@ export default function ReportPage() {
       <div style={{ textAlign: 'center' }}>
         <div style={{ fontSize: 40, marginBottom: 16 }}>😕</div>
         <p style={{ color: '#64748b', marginBottom: 24, fontSize: 15 }}>{error}</p>
-        <a href="/" style={{ background: '#1e293b', color: '#fff', padding: '12px 28px', borderRadius: 12, textDecoration: 'none', fontSize: 14 }}>重新测评</a>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+          <button
+            onClick={() => { setError(''); setLoading(true); window.location.reload() }}
+            style={{ background: '#1e293b', color: '#fff', padding: '12px 28px', borderRadius: 12, border: 'none', fontSize: 14, cursor: 'pointer' }}
+          >
+            重试
+          </button>
+          <a href="/" style={{ background: '#fff', color: '#64748b', padding: '12px 28px', borderRadius: 12, textDecoration: 'none', fontSize: 14, border: '1.5px solid #e2e8f0' }}>
+            返回首页
+          </a>
+        </div>
       </div>
     </div>
   )
@@ -228,10 +239,22 @@ export default function ReportPage() {
           </div>
         )}
 
-        {generating && (
+        {generating && !error && (
           <div className="rc" style={{ textAlign: 'center', padding: '44px 24px' }}>
             <div style={{ width: 32, height: 32, border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 14px' }}></div>
             <p style={{ color: '#64748b', fontSize: 14, margin: 0 }}>AI 分析中，约需 15 秒...</p>
+          </div>
+        )}
+
+        {error && surveyData && !report && (
+          <div className="rc" style={{ textAlign: 'center', padding: '24px' }}>
+            <p style={{ color: '#ef4444', fontSize: 14, marginBottom: 16 }}>{error}</p>
+            <button
+              onClick={() => { setError(''); generateReport(surveyData) }}
+              style={{ background: '#6366f1', color: '#fff', padding: '12px 28px', borderRadius: 12, border: 'none', fontSize: 14, cursor: 'pointer' }}
+            >
+              重新生成报告
+            </button>
           </div>
         )}
 

@@ -5,7 +5,6 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { QUESTIONS, GRADE_LABELS } from '@/lib/questions'
-import { calculateScores } from '@/lib/scoring'
 
 type Grade = 'primary' | 'middle' | 'senior'
 type Answers = Record<string, string>
@@ -76,8 +75,6 @@ export default function SurveyPage() {
   async function handleSubmit() {
     setPhase('submitting')
 
-    const scores = calculateScores(grade, parentAnswers, studentAnswers)
-
     try {
       const saveRes = await fetch('/api/save-survey', {
         method: 'POST',
@@ -88,7 +85,6 @@ export default function SurveyPage() {
           student_answers: studentAnswers,
           parent_open: parentOpen,
           student_open: studentOpen,
-          scores,
         }),
       })
 

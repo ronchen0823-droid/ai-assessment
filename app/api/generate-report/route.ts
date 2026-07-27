@@ -37,6 +37,32 @@ function validateReport(data: Record<string, string>): boolean {
   return true
 }
 
+function parseAndValidate(
+  fullText: string,
+  streamController: ReadableStreamDefaultController
+): Record<string, string> | null {
+  let reportData: Record<string, string>
+  try {
+    reportData = JSON.parse(fullText)
+  } catch {
+    const jsonMatch = fullText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      streamController.enqueue(new TextEncoder().encode('\n__ERROR__:AI返回格式异常'))
+      streamController.close()
+      return null
+    }
+    reportData = JSON.parse(jsonMatch[0])
+  }
+
+  if (!validateReport(reportData)) {
+    streamController.enqueue(new TextEncoder().encode('\n__ERROR__:报告生成不完整'))
+    streamController.close()
+    return null
+  }
+
+  return reportData
+}
+
 async function handlePOST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -77,45 +103,58 @@ async function handlePOST(req: NextRequest) {
     const stream = new ReadableStream({
       async start(streamController) {
         try {
-          const response = await getClient().chat.completions.create({
-            model,
-            max_tokens: 2000,
-            stream: true,
-            response_format: { type: 'json_object' },
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userMessage },
-            ],
-          }, { signal: controller.signal })
+          // 部分兼容 API（如 DeepSeek）在 streaming 模式下可能不支持
+          // response_format: { type: 'json_object' }，降级为非流式请求
+          const useStream = model !== 'deepseek-chat'
 
-          let fullText = ''
-          for await (const chunk of response as any) {
-            const content = chunk.choices[0]?.delta?.content || ''
-            if (content) {
-              fullText += content
-              streamController.enqueue(new TextEncoder().encode(content))
+          if (useStream) {
+            const response = await getClient().chat.completions.create({
+              model,
+              max_tokens: 2000,
+              stream: true,
+              response_format: { type: 'json_object' },
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userMessage },
+              ],
+            }, { signal: controller.signal })
+
+            let fullText = ''
+            for await (const chunk of response as any) {
+              const content = chunk.choices[0]?.delta?.content || ''
+              if (content) {
+                fullText += content
+                streamController.enqueue(new TextEncoder().encode(content))
+              }
             }
-          }
 
-          clearTimeout(timeoutId)
+            clearTimeout(timeoutId)
+            const reportData = parseAndValidate(fullText, streamController)
+            if (!reportData) return
+          } else {
+            // DeepSeek: 非流式 + json_object
+            const response = await getClient().chat.completions.create({
+              model,
+              max_tokens: 2000,
+              response_format: { type: 'json_object' },
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userMessage },
+              ],
+            }, { signal: controller.signal })
 
-          let reportData: Record<string, string>
-          try {
-            reportData = JSON.parse(fullText)
-          } catch {
-            const jsonMatch = fullText.match(/\{[\s\S]*\}/)
-            if (!jsonMatch) {
-              streamController.enqueue(new TextEncoder().encode('\n__ERROR__:AI返回格式异常'))
-              streamController.close()
-              return
+            clearTimeout(timeoutId)
+
+            const fullText = response.choices[0]?.message?.content || ''
+            // 非流式下也逐字符发送，保持前端 UI 一致
+            for (const char of fullText) {
+              streamController.enqueue(new TextEncoder().encode(char))
+              // 让前端有时间渲染
+              await new Promise(r => setTimeout(r, 5))
             }
-            reportData = JSON.parse(jsonMatch[0])
-          }
 
-          if (!validateReport(reportData)) {
-            streamController.enqueue(new TextEncoder().encode('\n__ERROR__:报告生成不完整'))
-            streamController.close()
-            return
+            const reportData = parseAndValidate(fullText, streamController)
+            if (!reportData) return
           }
 
           streamController.close()
