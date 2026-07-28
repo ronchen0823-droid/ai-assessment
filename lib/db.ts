@@ -453,8 +453,8 @@ export async function getAssessmentQualityReview(filter: QualityReviewFilter = {
       ...(weakestDim    ? { weakestDim }    : {}),
       ...(contradiction ? { contradiction } : {}),
       ...(reliability   ? { reliability }   : {}),
-      ...(hasReport === true ? { report: { not: P.DbNull } } : {}),
-      ...(hasReport === false ? { report: { equals: P.DbNull } } : {}),
+      ...(hasReport === true ? { report: { not: P.JsonNull } } : {}),
+      ...(hasReport === false ? { report: { equals: P.JsonNull } } : {}),
       ...(from || to
         ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } }
         : {}),

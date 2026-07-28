@@ -9,8 +9,8 @@ const ThinkingRadarChart = dynamic(() => import('@/components/RadarChart'), {
   loading: () => <div style={{ height: 220, background: '#f8f9fc', borderRadius: 16 }} />,
 })
 
-const CAMP_URL = '#'
-const CONSULT_URL = '#'
+const CAMP_URL = 'https://example.com/camp'
+const CONSULT_URL = 'https://example.com/consult'
 
 const GRADE_LABELS: Record<string, string> = {
   primary: '小学（4-6年级）',
