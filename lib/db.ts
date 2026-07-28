@@ -302,7 +302,7 @@ export async function getFunnelStats(params: {
       },
       _count: { id: true },
     })
-    return result.map(r => ({
+    return result.map((r: { channel: string | null; stage: string; _count: { id: number } }) => ({
       channel: r.channel,
       stage:   r.stage,
       count:   r._count.id,
