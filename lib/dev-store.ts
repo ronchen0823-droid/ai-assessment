@@ -10,7 +10,7 @@ const DATA_FILE = path.join(DATA_DIR, 'dev-db.json')
 
 interface DevRecord {
   id: string
-  createdAt: string
+  createdAt: Date
   grade: string
   parentAnswers: Record<string, string>
   studentAnswers: Record<string, string>
@@ -29,9 +29,9 @@ interface DevRecord {
   parentUserType: string | null
   parentPainpoint: string | null
   report: Record<string, string> | null
-  reportGenAt: string | null
+  reportGenAt: Date | null
   stage: string
-  stageUpdatedAt: string | null
+  stageUpdatedAt: Date | null
 }
 
 class DevStore {
@@ -46,6 +46,9 @@ class DevStore {
         const raw = fs.readFileSync(DATA_FILE, 'utf-8')
         const records: DevRecord[] = JSON.parse(raw)
         for (const r of records) {
+          r.createdAt = new Date(r.createdAt)
+          if (r.reportGenAt) r.reportGenAt = new Date(r.reportGenAt)
+          if (r.stageUpdatedAt) r.stageUpdatedAt = new Date(r.stageUpdatedAt)
           this.data.set(r.id, r)
         }
       }
@@ -71,14 +74,15 @@ class DevStore {
   assessment = {
     create: async (input: { data: any }): Promise<DevRecord> => {
       this.load()
+      const now = new Date()
       const record: DevRecord = {
         id: this.nextId(),
-        createdAt: new Date().toISOString(),
+        createdAt: now,
         ...input.data,
         report: null,
         reportGenAt: null,
         stage: input.data.stage || 'assessed',
-        stageUpdatedAt: input.data.stage ? new Date().toISOString() : null,
+        stageUpdatedAt: input.data.stage ? now : null,
       }
       this.data.set(record.id, record)
       this.save()

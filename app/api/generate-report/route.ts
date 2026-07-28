@@ -5,7 +5,7 @@ import { withRateLimit, REPORT_MAX_REQUESTS } from '@/lib/rate-limit'
 
 const VALID_GRADES = ['primary', 'middle', 'senior']
 const VALID_ANSWER_VALUES = ['A', 'B', 'C', 'D']
-const REPORT_TIMEOUT_MS = 30_000
+const REPORT_TIMEOUT_MS = 60_000 // 60秒，LLM API 高负载时需要更宽松的超时
 const REQUIRED_REPORT_FIELDS = [
   'diagnosis', 'mirror', 'insight',
   'solution_essence', 'solution_why_usual_fails', 'solution_method', 'bridge',
@@ -103,59 +103,35 @@ async function handlePOST(req: NextRequest) {
     const stream = new ReadableStream({
       async start(streamController) {
         try {
-          // 部分兼容 API（如 DeepSeek）在 streaming 模式下可能不支持
-          // response_format: { type: 'json_object' }，降级为非流式请求
-          const useStream = model !== 'deepseek-chat'
+          // 所有模型统一使用非流式请求（避免 DeepSeek streaming + json_object 兼容问题）
+          // 结果一次性返回后分批发送到前端，保持打字机效果的同时避免逐字符延时开销
+          const response = await getClient().chat.completions.create({
+            model,
+            max_tokens: 2000,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userMessage },
+            ],
+          }, { signal: controller.signal })
 
-          if (useStream) {
-            const response = await getClient().chat.completions.create({
-              model,
-              max_tokens: 2000,
-              stream: true,
-              response_format: { type: 'json_object' },
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userMessage },
-              ],
-            }, { signal: controller.signal })
+          clearTimeout(timeoutId)
 
-            let fullText = ''
-            for await (const chunk of response as any) {
-              const content = chunk.choices[0]?.delta?.content || ''
-              if (content) {
-                fullText += content
-                streamController.enqueue(new TextEncoder().encode(content))
-              }
+          const fullText = response.choices[0]?.message?.content || ''
+
+          // 以 ~50 字符为一批发送，既保持打字机效果又不浪费 Serverless 计费时间
+          const chunkSize = 50
+          for (let i = 0; i < fullText.length; i += chunkSize) {
+            const chunk = fullText.slice(i, i + chunkSize)
+            streamController.enqueue(new TextEncoder().encode(chunk))
+            // 仅间歇性让步，避免阻塞
+            if (i % (chunkSize * 4) === 0) {
+              await new Promise(r => setTimeout(r, 0))
             }
-
-            clearTimeout(timeoutId)
-            const reportData = parseAndValidate(fullText, streamController)
-            if (!reportData) return
-          } else {
-            // DeepSeek: 非流式 + json_object
-            const response = await getClient().chat.completions.create({
-              model,
-              max_tokens: 2000,
-              response_format: { type: 'json_object' },
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userMessage },
-              ],
-            }, { signal: controller.signal })
-
-            clearTimeout(timeoutId)
-
-            const fullText = response.choices[0]?.message?.content || ''
-            // 非流式下也逐字符发送，保持前端 UI 一致
-            for (const char of fullText) {
-              streamController.enqueue(new TextEncoder().encode(char))
-              // 让前端有时间渲染
-              await new Promise(r => setTimeout(r, 5))
-            }
-
-            const reportData = parseAndValidate(fullText, streamController)
-            if (!reportData) return
           }
+
+          const reportData = parseAndValidate(fullText, streamController)
+          if (!reportData) return
 
           streamController.close()
         } catch (err: any) {
@@ -163,6 +139,9 @@ async function handlePOST(req: NextRequest) {
           if (err?.name === 'AbortError') {
             streamController.enqueue(new TextEncoder().encode('\n__ERROR__:报告生成超时'))
           } else {
+            // 提供更详细的错误信息帮助调试
+            const errMsg = err?.message || '未知错误'
+            console.error('[generate-report] API error:', errMsg)
             streamController.enqueue(new TextEncoder().encode('\n__ERROR__:生成失败'))
           }
           streamController.close()

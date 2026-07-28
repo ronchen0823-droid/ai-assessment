@@ -7,7 +7,7 @@ const REQUIRED_REPORT_FIELDS = [
   'solution_essence', 'solution_why_usual_fails', 'solution_method', 'bridge',
 ]
 
-export async function GET(
+const handleGET = async function (
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
@@ -59,13 +59,14 @@ const handlePATCH = async function (
       return NextResponse.json({ error: '报告已生成，不允许覆盖' }, { status: 409 })
     }
 
+    const now = new Date()
     const assessment = await store.assessment.update({
       where: { id: params.id },
       data: {
         report: report as Record<string, string>,
-        reportGenAt: new Date().toISOString(),
+        reportGenAt: now,
         stage: 'report_viewed',
-        stageUpdatedAt: new Date().toISOString(),
+        stageUpdatedAt: now,
       },
     })
 
@@ -80,4 +81,5 @@ const handlePATCH = async function (
   }
 }
 
+export const GET = withRateLimit(handleGET)
 export const PATCH = withRateLimit(handlePATCH)

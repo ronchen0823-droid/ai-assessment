@@ -1,116 +1,121 @@
-import { devStore } from './dev-store'
-import type { Prisma } from '@prisma/client'
+// lib/db.ts
+// 统一数据访问层：Vercel / 云端 PostgreSQL 用 Prisma，本地开发无数据库时降级为 JSON 文件
+// Serverless 安全：PrismaClient 通过 globalThis 缓存为单例，避免连接池耗尽
 
-// 懒加载 PrismaClient，避免本地没有 prisma generate 时模块加载直接崩溃
-const globalForPrisma = globalThis as unknown as {
-  prismaClient: any | undefined
-  prismaAvailable: boolean | undefined
+import { devStore } from './dev-store'
+import type { PrismaClient } from '@prisma/client'
+
+// ─────────────────────────────────────────────
+// PrismaClient 懒加载单例（Serverless 安全）
+// 每次冷启动只会创建一个实例，通过 globalThis 跨模块请求共享
+// ─────────────────────────────────────────────
+
+type PrismaGlobal = {
+  client: PrismaClient | null
+  attempted: boolean
 }
 
-function loadPrisma() {
-  if (globalForPrisma.prismaAvailable) return globalForPrisma.prismaClient
+const globalForPrisma = globalThis as unknown as { __prisma: PrismaGlobal | undefined }
+
+function getPrismaSingleton(): PrismaClient | null {
+  // 缓存命中：上次加载成功
+  if (globalForPrisma.__prisma?.client) {
+    return globalForPrisma.__prisma.client
+  }
+  // 缓存命中：上次加载失败，不再重试
+  if (globalForPrisma.__prisma?.attempted) {
+    return null
+  }
+
+  // 首次尝试加载
+  if (!globalForPrisma.__prisma) {
+    globalForPrisma.__prisma = { client: null, attempted: false }
+  }
 
   try {
     const { PrismaClient } = require('@prisma/client')
-    globalForPrisma.prismaClient = new PrismaClient({ log: ['error'] })
-    globalForPrisma.prismaAvailable = true
-    return globalForPrisma.prismaClient
+    const client = new PrismaClient({
+      log: process.env.NODE_ENV === 'development' ? ['error'] : [],
+    })
+    globalForPrisma.__prisma.client = client
+    globalForPrisma.__prisma.attempted = true
+    return client
   } catch {
-    globalForPrisma.prismaAvailable = false
+    globalForPrisma.__prisma.attempted = true
     return null
   }
 }
 
 // ─────────────────────────────────────────────
-// 存储适配器：本地开发无 PostgreSQL 时降级为 JSON 文件
+// 环境判断
 // ─────────────────────────────────────────────
 
-function isVercel(): boolean {
-  return !!process.env.VERCEL || !!process.env.VERCEL_ENV
+function isCloudPlatform(): boolean {
+  // Vercel
+  if (process.env.VERCEL || process.env.VERCEL_ENV) return true
+  // 其他云端平台常见环境变量
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.FLY_APP_NAME || process.env.RENDER) return true
+  // 通用：有真实的 PostgreSQL 连接串（排除示例值）
+  if (
+    process.env.DATABASE_URL &&
+    !process.env.DATABASE_URL.includes('user:password@localhost') &&
+    process.env.DATABASE_URL.startsWith('postgres')
+  ) {
+    return true
+  }
+  return false
 }
 
 export function getStore() {
-  // Vercel 生产环境始终用 Prisma
-  if (isVercel()) {
-    return loadPrisma() || devStore
+  // 云端平台 / 有真实数据库 → Prisma
+  if (isCloudPlatform()) {
+    const prisma = getPrismaSingleton()
+    if (prisma) return prisma
+    console.error('[db] 云端环境但 Prisma 加载失败，降级为 JSON 文件存储')
+    return devStore
   }
 
-  // 本地开发：如果有真实 DATABASE_URL，用 Prisma
-  if (process.env.DATABASE_URL && process.env.DATABASE_URL !== 'postgresql://user:password@localhost:5432/ai-assessment') {
-    return loadPrisma() || devStore
+  // 本地开发：如果有真实 DATABASE_URL，尝试 Prisma
+  if (
+    process.env.DATABASE_URL &&
+    !process.env.DATABASE_URL.includes('user:password@localhost') &&
+    process.env.DATABASE_URL.startsWith('postgres')
+  ) {
+    const prisma = getPrismaSingleton()
+    if (prisma) return prisma
   }
 
-  // 否则用 JSON 文件存储
+  // 降级为 JSON 文件存储
   console.warn('[store] 使用本地 JSON 文件存储（无 PostgreSQL），数据保存在 .data/ 目录')
   return devStore
 }
 
-// 向后兼容
-export const prisma = (() => {
-  try {
-    const { PrismaClient } = require('@prisma/client')
-    return globalForPrisma.prismaClient ?? new PrismaClient({ log: ['error'] })
-  } catch {
-    return null as any
-  }
-})()
+// ─────────────────────────────────────────────
+// 向后兼容：prisma 导出（通过 getStore 获取，避免独立实例）
+// 仅在 DATABASE_URL 为真实 PostgreSQL 时可用
+// ─────────────────────────────────────────────
 
-// ─────────────────────────────────────────────
-// Prisma Schema（对应 schema.prisma）
-// ─────────────────────────────────────────────
-//
-// model Assessment {
-//   id            String    @id @default(cuid())
-//   createdAt     DateTime  @default(now())
-//
-//   channel       String?
-//   utmSource     String?
-//   utmCampaign   String?
-//
-//   grade         String    // "primary" | "middle" | "senior"
-//
-//   // childToken 生成规则：手机后4位 + 出生年份 + 孩子姓名拼音首字母（大写）
-//   // 示例："38762014Z"（后4位3876，2014年，姓张）
-//   // 不强制唯一，按 createdAt 排序取最新（允许重测）
-//   childToken      String?
-//
-//   parentAnswers   Json      // { PA1: "B", PA2: "C", ... }
-//   studentAnswers  Json      // { PB1: "A", PB2: "D", ... }
-//   parentOpen      String?
-//   studentOpen     String?
-//
-//   scoreDefine     Float
-//   scoreJudge      Float
-//   scoreIntegrate  Float
-//   defLevel        String
-//   judgeLevel      String
-//   intLevel        String
-//   weakestDim      String
-//   contradiction   String    // 主矛盾类型（ScoringResult.contradiction.type）
-//   reliability     String    // "high" | "medium" | "low"
-//
-//   parentUserType  String?   // "A" | "B" | "C" | "unknown"
-//   parentPainpoint String?
-//
-//   report          Json?
-//   reportGenAt     DateTime?
-//
-//   // assessed → report_viewed → camp_signup → course_signup
-//   stage           String    @default("assessed")
-//   stageUpdatedAt  DateTime?
-//
-//   enrollments     Enrollment[]
-// }
-//
-// model Enrollment {
-//   id           String      @id @default(cuid())
-//   createdAt    DateTime    @default(now())
-//   assessmentId String?
-//   assessment   Assessment? @relation(fields: [assessmentId], references: [id])
-//   childToken   String?
-//   productType  String      // "camp_f1" | "course_primary" | "course_middle" | "course_senior"
-//   grade        String
-// }
+export function getPrismaClient(): PrismaClient | null {
+  if (
+    process.env.DATABASE_URL &&
+    !process.env.DATABASE_URL.includes('user:password@localhost') &&
+    process.env.DATABASE_URL.startsWith('postgres')
+  ) {
+    return getPrismaSingleton()
+  }
+  return null
+}
+
+// 向后兼容别名（避免修改所有引用处，逐步废弃）
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_, prop) {
+    const client = getPrismaSingleton()
+    if (!client) {
+      throw new Error('PrismaClient 不可用：未配置 PostgreSQL 数据库')
+    }
+    return (client as any)[prop]
+  },
+})
 
 // ─────────────────────────────────────────────
 // 类型定义
@@ -136,7 +141,7 @@ export type AssessmentCreateInput = {
   parentOpen?:    string
   studentOpen?:   string
 
-  scores:         Prisma.InputJsonValue
+  scores:         any
 
   scoreDefine:    number
   scoreJudge:     number
@@ -154,7 +159,6 @@ export type AssessmentCreateInput = {
 
 // ─────────────────────────────────────────────
 // childToken 工具函数
-// 用法：generateChildToken("3876", "2014", "Zhang") → "38762014Z"
 // ─────────────────────────────────────────────
 
 export function generateChildToken(
@@ -169,18 +173,28 @@ export function generateChildToken(
 }
 
 // ─────────────────────────────────────────────
-// 数据访问
+// 数据访问辅助函数（依赖 PrismaClient，仅在 PostgreSQL 环境下可用）
 // ─────────────────────────────────────────────
 
+function ensurePrisma(): PrismaClient {
+  const client = getPrismaSingleton()
+  if (!client) {
+    throw new Error('此功能需要 PostgreSQL 数据库，当前环境不可用')
+  }
+  return client
+}
+
 export async function createAssessment(data: AssessmentCreateInput) {
-  return prisma.assessment.create({ data })
+  const client = ensurePrisma()
+  return client.assessment.create({ data })
 }
 
 export async function saveReport(
   assessmentId: string,
   report:       Record<string, string>
 ) {
-  return prisma.assessment.update({
+  const client = ensurePrisma()
+  return client.assessment.update({
     where: { id: assessmentId },
     data: {
       report,
@@ -195,14 +209,16 @@ export async function updateStage(
   assessmentId: string,
   stage:        AssessmentStage
 ) {
-  return prisma.assessment.update({
+  const client = ensurePrisma()
+  return client.assessment.update({
     where: { id: assessmentId },
     data:  { stage, stageUpdatedAt: new Date() },
   })
 }
 
 export async function getAssessmentsByChild(childToken: string) {
-  return prisma.assessment.findMany({
+  const client = ensurePrisma()
+  return client.assessment.findMany({
     where:   { childToken },
     orderBy: { createdAt: 'asc' },
     select: {
@@ -273,7 +289,7 @@ export async function buildProgressSummary(childToken: string): Promise<Progress
 }
 
 // ─────────────────────────────────────────────
-// 漏斗数据查询（支持按天/周/月聚合）
+// 漏斗数据查询
 // ─────────────────────────────────────────────
 
 export type FunnelGranularity = 'day' | 'week' | 'month' | 'total'
@@ -291,10 +307,11 @@ export async function getFunnelStats(params: {
   granularity?: FunnelGranularity
   channel?:     string
 }): Promise<FunnelStatsItem[]> {
+  const client = ensurePrisma()
   const { from, to, granularity = 'total', channel } = params
 
   if (granularity === 'total') {
-    const result = await prisma.assessment.groupBy({
+    const result = await client.assessment.groupBy({
       by:    ['channel', 'stage'],
       where: {
         createdAt: { gte: from, lte: to },
@@ -309,7 +326,7 @@ export async function getFunnelStats(params: {
     }))
   }
 
-  const records = await prisma.assessment.findMany({
+  const records = await client.assessment.findMany({
     where: {
       createdAt: { gte: from, lte: to },
       ...(channel ? { channel } : {}),
@@ -323,7 +340,6 @@ export async function getFunnelStats(params: {
     if (g === 'day') {
       d.setHours(0, 0, 0, 0)
     } else if (g === 'week') {
-      // 以周一为周起始（中国标准）
       d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
       d.setHours(0, 0, 0, 0)
     } else if (g === 'month') {
@@ -350,11 +366,6 @@ export async function getFunnelStats(params: {
 
 // ─────────────────────────────────────────────
 // 渠道转化率
-//
-// 每条 Assessment 只存最新 stage，所以：
-// totalAssessed = 各阶段数量之和
-// reportViewed  = report_viewed + camp_signup + course_signup
-// campSignup    = camp_signup   + course_signup
 // ─────────────────────────────────────────────
 
 export type ChannelConversionRate = {
@@ -372,7 +383,8 @@ export async function getChannelConversionRates(
   from: Date,
   to:   Date
 ): Promise<ChannelConversionRate[]> {
-  const result = await prisma.assessment.groupBy({
+  const client = ensurePrisma()
+  const result = await client.assessment.groupBy({
     by:    ['channel', 'stage'],
     where: { createdAt: { gte: from, lte: to } },
     _count: { id: true },
@@ -380,7 +392,7 @@ export async function getChannelConversionRates(
 
   const channelMap = new Map<string | null, Record<string, number>>()
 
-  for (const r of result) {
+  for (const r of result as { channel: string | null; stage: string; _count: { id: number } }[]) {
     const ch = r.channel
     if (!channelMap.has(ch)) {
       channelMap.set(ch, { assessed: 0, report_viewed: 0, camp_signup: 0, course_signup: 0 })
@@ -413,7 +425,7 @@ export async function getChannelConversionRates(
 }
 
 // ─────────────────────────────────────────────
-// 报告质量复盘（按弱维度/矛盾类型/可靠性分组看样本）
+// 报告质量复盘
 // ─────────────────────────────────────────────
 
 export type QualityReviewFilter = {
@@ -428,19 +440,21 @@ export type QualityReviewFilter = {
 }
 
 export async function getAssessmentQualityReview(filter: QualityReviewFilter = {}) {
+  const client = ensurePrisma()
+  const { Prisma: P } = require('@prisma/client')
   const {
     grade, weakestDim, contradiction, reliability, hasReport,
     from, to, limit = 50,
   } = filter
 
-  return prisma.assessment.findMany({
+  return client.assessment.findMany({
     where: {
       ...(grade         ? { grade }         : {}),
       ...(weakestDim    ? { weakestDim }    : {}),
       ...(contradiction ? { contradiction } : {}),
       ...(reliability   ? { reliability }   : {}),
-      ...(hasReport === true ? { report: { not: Prisma.JsonNull } } : {}),
-      ...(hasReport === false ? { report: { equals: Prisma.JsonNull } } : {}),
+      ...(hasReport === true ? { report: { not: P.DbNull } } : {}),
+      ...(hasReport === false ? { report: { equals: P.DbNull } } : {}),
       ...(from || to
         ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } }
         : {}),
@@ -471,9 +485,15 @@ export async function getAssessmentQualityReview(filter: QualityReviewFilter = {
 // ─────────────────────────────────────────────
 
 export async function getParentUserTypeDistribution(from: Date, to: Date) {
-  return prisma.assessment.groupBy({
+  const client = ensurePrisma()
+  const result = await client.assessment.groupBy({
     by:    ['parentUserType', 'grade'],
     where: { createdAt: { gte: from, lte: to } },
     _count: { id: true },
   })
+  return result.map((r: { parentUserType: string | null; grade: string; _count: { id: number } }) => ({
+    parentUserType: r.parentUserType,
+    grade: r.grade,
+    count: r._count.id,
+  }))
 }
