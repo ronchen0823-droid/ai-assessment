@@ -63,6 +63,21 @@ function parseAndValidate(
   return reportData
 }
 
+function hasValidReportPayload(fullText: string): boolean {
+  try {
+    const parsed = JSON.parse(fullText)
+    return validateReport(parsed)
+  } catch {
+    const jsonMatch = fullText.match(/\\{[\\s\\S]*\\}/)
+    if (!jsonMatch) return false
+    try {
+      return validateReport(JSON.parse(jsonMatch[0]))
+    } catch {
+      return false
+    }
+  }
+}
+
 async function handlePOST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -105,9 +120,9 @@ async function handlePOST(req: NextRequest) {
         try {
           // 所有模型统一使用非流式请求（避免 DeepSeek streaming + json_object 兼容问题）
           // 结果一次性返回后分批发送到前端，保持打字机效果的同时避免逐字符延时开销
-          const response = await getClient().chat.completions.create({
+          let response = await getClient().chat.completions.create({
             model,
-            max_tokens: 2000,
+            max_tokens: 3000,
             response_format: { type: 'json_object' },
             messages: [
               { role: 'system', content: systemPrompt },
@@ -121,7 +136,29 @@ async function handlePOST(req: NextRequest) {
 
           clearTimeout(timeoutId)
 
-          const fullText = response.choices[0]?.message?.content || ''
+          let fullText = response.choices[0]?.message?.content || ''
+
+          // 某些复杂学段的 JSON 模式可能返回空内容或不完整 JSON，自动降级重试一次。
+          if (!hasValidReportPayload(fullText)) {
+            console.warn('[generate-report] invalid JSON response, retrying in text mode', {
+              grade: grade_level,
+              model,
+              finishReason: response.choices[0]?.finish_reason,
+              contentLength: fullText.length,
+            })
+            response = await getClient().chat.completions.create({
+              model,
+              max_tokens: 3000,
+              messages: [
+                { role: 'system', content: `${systemPrompt}\n\n请严格只输出完整 JSON，不要输出任何解释、Markdown 或思考过程。` },
+                { role: 'user', content: userMessage },
+              ],
+              ...(model === 'deepseek-v4-flash' || model === 'deepseek-v4-pro'
+                ? { extra_body: { thinking: { type: 'disabled' } } }
+                : {}),
+            } as any, { signal: controller.signal })
+            fullText = response.choices[0]?.message?.content || ''
+          }
 
           // 以 ~50 字符为一批发送，既保持打字机效果又不浪费 Serverless 计费时间
           const chunkSize = 50
