@@ -217,7 +217,7 @@ export default function Home() {
 
           <div className="home-brand">
             <div className="home-brand-bar"></div>
-            <span className="home-brand-text">致知 AI 学院</span>
+            <span className="home-brand-text">致知AI学院</span>
           </div>
 
           <div className="home-hero">
