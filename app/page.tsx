@@ -164,11 +164,40 @@ export default function Home() {
           transform: translateX(2px);
         }
         .home-footer {
+          margin-top: 30px;
+          padding: 16px 18px;
+          border: 1px solid #e8ecf2;
+          border-radius: 16px;
+          background: rgba(255,255,255,0.68);
+        }
+        .home-footer-main {
           display: flex;
-          align-items: center;
-          gap: 0;
-          padding-top: 20px;
-          border-top: 1px solid #e8ecf2;
+          align-items: flex-start;
+          gap: 11px;
+        }
+        .home-footer-dot {
+          width: 7px;
+          height: 7px;
+          margin-top: 6px;
+          border-radius: 50%;
+          background: #6366f1;
+          box-shadow: 0 0 0 4px rgba(99,102,241,0.1);
+          flex: 0 0 auto;
+        }
+        .home-footer-title {
+          color: #475569;
+          font-size: 12.5px;
+          line-height: 1.6;
+          font-weight: 500;
+          font-family: 'Noto Sans SC', sans-serif;
+        }
+        .home-footer-subtitle {
+          margin-top: 4px;
+          color: #94a3b8;
+          font-size: 11.5px;
+          line-height: 1.6;
+          font-weight: 300;
+          font-family: 'Noto Sans SC', sans-serif;
         }
         .home-footer-item {
           font-size: 11.5px;
@@ -188,7 +217,7 @@ export default function Home() {
 
           <div className="home-brand">
             <div className="home-brand-bar"></div>
-            <span className="home-brand-text">AI 思维课程</span>
+            <span className="home-brand-text">致知 AI 学院</span>
           </div>
 
           <div className="home-hero">
@@ -197,10 +226,7 @@ export default function Home() {
               孩子的 AI 思维<br />
               <span className="home-title-accent">现在什么水平？</span>
             </h1>
-            <p className="home-subtitle">
-              家长与孩子各完成一份问卷，约 10 分钟<br />
-              AI 实时生成个性化分析报告
-            </p>
+  
           </div>
 
           <p className="home-section-label">选择学段</p>
@@ -225,9 +251,13 @@ export default function Home() {
           </div>
 
           <div className="home-footer">
-            <span className="home-footer-item">家长问卷 10 题</span>
-            <span className="home-footer-item">学生问卷 10 题</span>
-            <span className="home-footer-item">报告可分享</span>
+            <div className="home-footer-main">
+              <div className="home-footer-dot"></div>
+              <div>
+                <div className="home-footer-title">家长与孩子各完成一份问卷，约 10 分钟</div>
+                <div className="home-footer-subtitle">AI 实时生成个性化分析报告，报告可分享</div>
+              </div>
+            </div>
           </div>
 
         </div>
