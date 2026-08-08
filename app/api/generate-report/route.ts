@@ -113,7 +113,11 @@ async function handlePOST(req: NextRequest) {
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userMessage },
             ],
-          }, { signal: controller.signal })
+            // DeepSeek V4 的 JSON 输出偶尔会在 thinking 模式下返回空 content。
+            ...(model === 'deepseek-v4-flash' || model === 'deepseek-v4-pro'
+              ? { extra_body: { thinking: { type: 'disabled' } } }
+              : {}),
+          } as any, { signal: controller.signal })
 
           clearTimeout(timeoutId)
 
