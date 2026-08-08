@@ -1,16 +1,9 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
-import dynamic from 'next/dynamic'
 import type { ScoringResult } from '@/lib/scoring'
 
-const ThinkingRadarChart = dynamic(() => import('@/components/RadarChart'), {
-  ssr: false,
-  loading: () => <div style={{ height: 220, background: '#f8f9fc', borderRadius: 16 }} />,
-})
-
 const CAMP_URL = 'https://example.com/camp'
-const CONSULT_URL = 'https://example.com/consult'
 
 const GRADE_LABELS: Record<string, string> = {
   primary: '小学（4-6年级）',
@@ -190,6 +183,12 @@ export default function ReportPage() {
         .btext { font-size:15px; color:#374151; line-height:1.85; font-weight:400; margin:0; }
         .ibox { background:#fafafa; border-left:3px solid #6366f1; border-radius:0 12px 12px 0; padding:16px 18px; }
         .wbox { background:linear-gradient(135deg,#f0fdf4,#ecfdf5); border-radius:14px; padding:16px 18px; border:1px solid #d1fae5; }
+        .dim-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:16px; }
+        .dim-card { min-width:0; padding:14px 10px; border:1px solid #eef2f7; border-radius:14px; background:#fcfdff; text-align:center; }
+        .dim-card-label { color:#64748b; font-size:12px; line-height:1.5; white-space:nowrap; }
+        .dim-card-status { display:flex; align-items:center; justify-content:center; gap:5px; margin-top:9px; color:#1e293b; font-size:13px; font-weight:600; line-height:1.4; }
+        .dim-card-dot { width:7px; height:7px; border-radius:50%; flex:0 0 auto; }
+        @media (max-width: 380px) { .dim-card { padding-left:6px; padding-right:6px; } .dim-card-label { font-size:11px; } .dim-card-status { font-size:12px; } }
       `}</style>
 
       <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'rgba(247,248,252,0.93)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #f1f5f9', padding: '11px 20px' }}>
@@ -210,21 +209,31 @@ export default function ReportPage() {
 
         {surveyData && (
           <div className="rc" style={{ animationDelay: '0.05s' }}>
-            <div style={{ fontSize: 15, fontWeight: 600, color: '#1e293b', marginBottom: 3, fontFamily: "'Noto Serif SC',serif" }}>思维主导权雷达图</div>
-            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>三个维度综合反映孩子当前的AI协作模式</div>
-            <ThinkingRadarChart scores={surveyData.scores} />
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#1e293b', marginBottom: 3, fontFamily: "'Noto Serif SC',serif" }}>思维主导权状态</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 2 }}>三个维度分别反映孩子当前的思维使用状态</div>
             {(() => {
               const s = surveyData.scores
+              const tone: Record<string, string> = {
+                not_established: '#f97316',
+                emerging: '#f59e0b',
+                developing: '#3b82f6',
+                established: '#10b981',
+                strong: '#6366f1',
+              }
               return (
-                <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div className="dim-grid">
                   {[
-                    { label: '主动定义', score: s.active_define.raw, level: s.active_define.level },
-                    { label: '主动判断', score: s.active_judge.raw, level: s.active_judge.level },
-                    { label: '主动整合', score: s.active_integrate.raw, level: s.active_integrate.level },
+                    { label: '主动定义', level: s.active_define.level },
+                    { label: '主动判断', level: s.active_judge.level },
+                    { label: '主动整合', level: s.active_integrate.level },
                   ].map(d => (
-                    <span key={d.label} style={{ fontSize: 12, color: '#64748b', background: '#f1f5f9', padding: '3px 12px', borderRadius: 12 }}>
-                      {d.label}: {dimLevelLabel[d.level] ?? d.level}（{d.score.toFixed(1)}/4）
-                    </span>
+                    <div className="dim-card" key={d.label}>
+                      <div className="dim-card-label">{d.label}</div>
+                      <div className="dim-card-status">
+                        <span className="dim-card-dot" style={{ background: tone[d.level] ?? '#94a3b8' }} />
+                        {dimLevelLabel[d.level] ?? d.level}
+                      </div>
+                    </div>
                   ))}
                 </div>
               )
@@ -290,12 +299,9 @@ export default function ReportPage() {
               <div className="wbox">
                 <p className="btext" style={{ color: '#065f46' }}>{report.bridge}</p>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 20 }}>
+              <div style={{ marginTop: 20 }}>
                 <a href={CAMP_URL} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '15px', borderRadius: 14, fontSize: 15, fontWeight: 600, textDecoration: 'none', background: '#1e293b', color: '#fff' }}>
-                  了解 7 天思维训练营 →
-                </a>
-                <a href={CONSULT_URL} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '15px', borderRadius: 14, fontSize: 14, fontWeight: 500, textDecoration: 'none', background: '#fff', color: '#374151', border: '1.5px solid #e2e8f0' }}>
-                  预约一对一咨询
+                  了解 5 天思维训练营 →
                 </a>
               </div>
             </div>
